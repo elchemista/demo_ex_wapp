@@ -1,14 +1,21 @@
 import Config
 
+ex_wapp_debug =
+  System.get_env("EX_WAPP_DEBUG", "false")
+  |> String.downcase()
+  |> then(&(&1 in ["1", "true", "yes", "on"]))
+
 log_level =
-  case String.downcase(System.get_env("DEMO_LOG_LEVEL", "info")) do
-    "debug" -> :debug
-    "warning" -> :warning
-    "error" -> :error
-    _level -> :info
+  case {ex_wapp_debug, String.downcase(System.get_env("DEMO_LOG_LEVEL", "info"))} do
+    {true, _level} -> :debug
+    {false, "debug"} -> :debug
+    {false, "warning"} -> :warning
+    {false, "error"} -> :error
+    {false, _level} -> :info
   end
 
 config :logger, level: log_level
+config :demo_ex_wapp, ex_wapp_debug: ex_wapp_debug
 
 if System.get_env("PHX_SERVER") do
   config :demo_ex_wapp, DemoExWappWeb.Endpoint, server: true

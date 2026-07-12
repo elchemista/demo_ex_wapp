@@ -34,7 +34,7 @@ defmodule DemoExWapp.SessionState do
     :receive_event
   ]
 
-  @type test_status :: :pending | :running | :passed | :failed
+  @type test_status :: :pending | :running | :passed | :failed | :blocked
   @type test_result :: %{
           status: test_status(),
           detail: String.t() | nil,
@@ -69,7 +69,7 @@ defmodule DemoExWapp.SessionState do
   @doc "Marks one test as running, passed, or failed."
   @spec mark_test(atom(), test_status(), String.t() | nil) :: :ok
   def mark_test(test, status, detail \\ nil)
-      when is_atom(test) and status in [:pending, :running, :passed, :failed] do
+      when is_atom(test) and status in [:pending, :running, :passed, :failed, :blocked] do
     GenServer.call(__MODULE__, {:mark_test, test, status, detail})
   end
 

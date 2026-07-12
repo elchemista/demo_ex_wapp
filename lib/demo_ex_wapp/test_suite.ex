@@ -11,6 +11,7 @@ defmodule DemoExWapp.TestSuite do
   alias DemoExWapp.{SessionState, WhatsApp}
 
   @type operation :: {atom(), (-> term())}
+  @type operation_result :: :passed | {:failed, term()}
 
   @doc "Runs every outbound feature check for the selected contact."
   @spec run(String.t()) :: :ok
@@ -18,9 +19,19 @@ defmodule DemoExWapp.TestSuite do
     Logger.info("Automatic ExWapp test suite started", target_jid: jid)
     :ok = SessionState.reset_tests(jid)
 
-    jid
-    |> operations()
-    |> Enum.each(&run_operation(&1, jid))
+    [preflight | remaining] = operations(jid)
+
+    case run_operation(preflight, jid) do
+      {:failed, reason} when is_binary(jid) ->
+        if group_jid?(jid) and group_preflight_failed?(reason) do
+          block_group_operations(remaining, jid, reason)
+        else
+          Enum.each(remaining, &run_operation(&1, jid))
+        end
+
+      :passed ->
+        Enum.each(remaining, &run_operation(&1, jid))
+    end
 
     Logger.info("Automatic ExWapp test suite finished", target_jid: jid)
   end
@@ -83,14 +94,23 @@ defmodule DemoExWapp.TestSuite do
     ]
   end
 
-  @spec run_operation(operation(), String.t()) :: :ok
+  @spec run_operation(operation(), String.t()) :: operation_result()
   defp run_operation({test, operation}, jid) do
     Logger.info("ExWapp test operation started", test: test, target_jid: jid)
     :ok = SessionState.mark_test(test, :running)
+    started_at = System.monotonic_time(:millisecond)
 
-    operation
-    |> safely_run()
-    |> record_result(test, jid)
+    result = safely_run(operation)
+    elapsed_ms = System.monotonic_time(:millisecond) - started_at
+
+    Logger.info("ExWapp test operation completed",
+      test: test,
+      target_jid: jid,
+      operation_ms: elapsed_ms,
+      result: inspect(result, limit: 30, printable_limit: 2_000)
+    )
+
+    record_result(result, test, jid)
   end
 
   @spec safely_run((-> term())) :: term()
@@ -102,14 +122,22 @@ defmodule DemoExWapp.TestSuite do
     kind, reason -> {:error, {kind, reason}}
   end
 
-  @spec record_result(term(), atom(), String.t()) :: :ok
-  defp record_result(:ok, test, jid), do: pass(test, jid, "ok")
-  defp record_result({:ok, id}, test, jid), do: pass(test, jid, "message_id=#{id}")
+  @spec record_result(term(), atom(), String.t()) :: operation_result()
+  defp record_result(:ok, test, jid) do
+    :ok = pass(test, jid, "ok")
+    :passed
+  end
+
+  defp record_result({:ok, id}, test, jid) do
+    :ok = pass(test, jid, "message_id=#{id}")
+    :passed
+  end
 
   defp record_result({:error, reason}, test, jid) do
     detail = inspect(reason, limit: 30, printable_limit: 2_000)
     Logger.error("ExWapp test operation failed", test: test, target_jid: jid, reason: detail)
-    SessionState.mark_test(test, :failed, detail)
+    :ok = SessionState.mark_test(test, :failed, detail)
+    {:failed, reason}
   end
 
   defp record_result(other, test, jid) do
@@ -121,8 +149,34 @@ defmodule DemoExWapp.TestSuite do
       reason: detail
     )
 
-    SessionState.mark_test(test, :failed, detail)
+    :ok = SessionState.mark_test(test, :failed, detail)
+    {:failed, other}
   end
+
+  @spec block_group_operations([operation()], String.t(), term()) :: :ok
+  defp block_group_operations(operations, jid, reason) do
+    detail =
+      "Blocked by group metadata preflight: #{inspect(reason)}. " <>
+        "Choose a direct @s.whatsapp.net chat to validate media encoding independently."
+
+    Logger.error("Group suite blocked after text preflight",
+      target_jid: jid,
+      target_type: :group,
+      reason: inspect(reason)
+    )
+
+    Enum.each(operations, fn {test, _operation} ->
+      SessionState.mark_test(test, :blocked, detail)
+    end)
+  end
+
+  @spec group_preflight_failed?(term()) :: boolean()
+  defp group_preflight_failed?({:group_send_failed, _reason}), do: true
+  defp group_preflight_failed?({:exit, {:timeout, {GenServer, :call, _details}}}), do: true
+  defp group_preflight_failed?(_reason), do: false
+
+  @spec group_jid?(String.t()) :: boolean()
+  defp group_jid?(jid), do: String.ends_with?(jid, "@g.us")
 
   @spec pass(atom(), String.t(), String.t()) :: :ok
   defp pass(test, jid, detail) do

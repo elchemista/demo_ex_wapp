@@ -196,6 +196,13 @@ defmodule DemoExWappWeb.DashboardLive do
             </.form>
           </div>
 
+          <p :if={group_jid?(@selected_jid)} class="group-warning">
+            Group selected: ExWapp must fetch group metadata and build sender-key fanout before it
+            reaches the media encoder. For the first media check, use a direct
+            <code>@s.whatsapp.net</code> chat. Debug mode records the complete
+            <code>w:g2</code> request lifecycle.
+          </p>
+
           <button
             id="run-suite-button"
             type="button"
@@ -313,7 +320,13 @@ defmodule DemoExWappWeb.DashboardLive do
   end
 
   @spec first_chat_jid([map()]) :: String.t()
-  defp first_chat_jid([first | _rest]), do: first.jid
+  defp first_chat_jid([first | _rest] = chats) do
+    case Enum.find(chats, &(not Map.get(&1, :is_group?, false))) do
+      nil -> first.jid
+      direct_chat -> direct_chat.jid
+    end
+  end
+
   defp first_chat_jid([]), do: ""
 
   @spec preserve_or_select(String.t(), [map()]) :: String.t()
@@ -330,7 +343,15 @@ defmodule DemoExWappWeb.DashboardLive do
 
   @spec chat_options([map()]) :: [{String.t(), String.t()}]
   defp chat_options(chats),
-    do: Enum.map(chats, &{"#{&1.label} — #{&1.jid}", &1.jid})
+    do: Enum.map(chats, &{chat_option_label(&1), &1.jid})
+
+  @spec chat_option_label(map()) :: String.t()
+  defp chat_option_label(%{is_group?: true} = chat), do: "[Group] #{chat.label} — #{chat.jid}"
+  defp chat_option_label(chat), do: "#{chat.label} — #{chat.jid}"
+
+  @spec group_jid?(term()) :: boolean()
+  defp group_jid?(jid) when is_binary(jid), do: String.ends_with?(jid, "@g.us")
+  defp group_jid?(_jid), do: false
 
   @spec connect_busy?(atom()) :: boolean()
   defp connect_busy?(status),
@@ -342,6 +363,7 @@ defmodule DemoExWappWeb.DashboardLive do
   @spec status_icon(atom()) :: String.t()
   defp status_icon(:passed), do: "✓"
   defp status_icon(:failed), do: "×"
+  defp status_icon(:blocked), do: "!"
   defp status_icon(:running), do: "…"
   defp status_icon(:pending), do: "○"
 

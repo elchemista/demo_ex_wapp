@@ -9,6 +9,12 @@ config :ex_wapp, :runtime,
     connect_timeout_ms: 15_000,
     recv_timeout_ms: :infinity
   ],
+  iq: [
+    default_timeout_ms: 60_000,
+    prekey_timeout_ms: 60_000,
+    usync_timeout_ms: 30_000,
+    group_info_timeout_ms: 15_000
+  ],
   signal: [
     session_max_age_ms: :timer.hours(3)
   ],
@@ -73,7 +79,22 @@ config :logger, :default_formatter,
     :reason,
     :detail,
     :filename,
-    :bytes
+    :bytes,
+    :operation_ms,
+    :target_type,
+    :ex_wapp_debug,
+    :result,
+    :count,
+    :url,
+    :store_path,
+    :from_me,
+    :mimetype,
+    :health_type,
+    :metadata,
+    :message,
+    :task_pid,
+    :code_bytes,
+    :payload
   ]
 
 config :phoenix, :json_library, Jason
