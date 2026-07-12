@@ -85,7 +85,9 @@ defmodule DemoExWappWeb.DashboardLive do
        )}
     else
       Logger.info("Run suite clicked", target_jid: jid)
-      {:noreply, execute(socket, "Automatic test suite started", fn -> WhatsApp.run_suite(jid) end)}
+
+      {:noreply,
+       execute(socket, "Automatic test suite started", fn -> WhatsApp.run_suite(jid) end)}
     end
   end
 
@@ -210,8 +212,9 @@ defmodule DemoExWappWeb.DashboardLive do
           <p :if={group_jid?(@selected_jid)} class="group-warning">
             Group selected: ExWapp must fetch group metadata and build sender-key fanout before it
             reaches the media encoder. For the first media check, use a direct
-            <code>@s.whatsapp.net</code> chat. Debug mode records the complete
-            <code>w:g2</code> request lifecycle.
+            <code>@s.whatsapp.net</code>
+            chat. Debug mode records the complete <code>w:g2</code>
+            request lifecycle.
           </p>
 
           <p :if={lid_jid?(@selected_jid)} class="group-warning">

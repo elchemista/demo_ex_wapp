@@ -672,8 +672,7 @@ defmodule DemoExWapp.WhatsApp do
     %{
       jid: target_jid,
       chat_jid: chat_jid,
-      label:
-        other |> Map.get(:name) |> present_string() || contact_label(contact) || chat_jid,
+      label: other |> Map.get(:name) |> present_string() || contact_label(contact) || chat_jid,
       phone_number: contact_phone(contact, target_jid),
       unread_count: Map.get(other, :unread_count, 0),
       is_group?: group?,
