@@ -53,6 +53,12 @@ Development now enables ExWapp debug logging by default. `EX_WAPP_DEBUG=1`
 makes the intent explicit; set `EX_WAPP_DEBUG=0` to turn it off.
 `DEMO_LOG_LEVEL=debug` remains available as a general-purpose switch.
 
+The demo intentionally does not override ExWapp's WhatsApp Web version,
+device identity, IQ timeouts, Signal lifetime, or initial-sync settings. This
+keeps the session and text-send path identical to a normal ExWapp consumer
+such as `isma`; protocol overrides can authenticate successfully but still
+cause later USync or prekey requests to be ignored by WhatsApp.
+
 For the first structured-message check, choose a direct `@s.whatsapp.net` chat.
 A `@g.us` target first exercises group metadata lookup and sender-key fanout; if
 that preflight fails, the demo blocks the remaining checks instead of reporting
