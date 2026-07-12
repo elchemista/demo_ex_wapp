@@ -15,6 +15,8 @@ defmodule DemoExWapp.WhatsApp do
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
 
   @session_id "demo"
+  @ack_poll_interval_ms 50
+  @ack_timeout_ms 5_000
   @qr_svg_settings %QRCode.Render.SvgSettings{flatten: true}
 
   @doc "Starts the WhatsApp wrapper."
@@ -74,6 +76,17 @@ defmodule DemoExWapp.WhatsApp do
           {:ok, String.t()} | {:error, term()}
   def send_event(jid, name, start_time, opts),
     do: with_session(&ExWapp.send_event(&1, jid, name, start_time, opts))
+
+  @doc "Waits until WhatsApp accepts or rejects one outbound message stanza."
+  @spec await_message_ack(String.t(), String.t(), pos_integer()) ::
+          {:ok, ExWapp.Chat.message_status()} | {:error, term()}
+  def await_message_ack(jid, message_id, timeout_ms \\ @ack_timeout_ms)
+      when is_binary(jid) and is_binary(message_id) and is_integer(timeout_ms) and timeout_ms > 0 do
+    with_session(fn session ->
+      deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+      poll_message_ack(session, jid, message_id, deadline_ms)
+    end)
+  end
 
   @doc "Downloads, verifies, and decrypts one inbound media reference."
   @spec download_media(ExWapp.Media.Ref.t()) ::
@@ -363,6 +376,39 @@ defmodule DemoExWapp.WhatsApp do
     case session() do
       {:ok, session} -> fun.(session)
       :error -> {:error, :session_not_started}
+    end
+  end
+
+  @spec poll_message_ack(pid(), String.t(), String.t(), integer()) ::
+          {:ok, ExWapp.Chat.message_status()} | {:error, term()}
+  defp poll_message_ack(session, jid, message_id, deadline_ms) do
+    status =
+      session
+      |> ExWapp.get_messages(jid, limit: 200)
+      |> Enum.find_value(fn message ->
+        if Map.get(message, :id) == message_id, do: Map.get(message, :status)
+      end)
+
+    case status do
+      status when status in [:sent, :delivered, :read] ->
+        {:ok, status}
+
+      :failed ->
+        {:error, {:server_rejected, message_id}}
+
+      _pending_or_missing ->
+        continue_ack_poll(session, jid, message_id, deadline_ms)
+    end
+  end
+
+  @spec continue_ack_poll(pid(), String.t(), String.t(), integer()) ::
+          {:ok, ExWapp.Chat.message_status()} | {:error, term()}
+  defp continue_ack_poll(session, jid, message_id, deadline_ms) do
+    if System.monotonic_time(:millisecond) >= deadline_ms do
+      {:error, {:server_ack_timeout, message_id}}
+    else
+      Process.sleep(@ack_poll_interval_ms)
+      poll_message_ack(session, jid, message_id, deadline_ms)
     end
   end
 
