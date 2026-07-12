@@ -4,39 +4,10 @@ config :demo_ex_wapp,
   generators: [timestamp_type: :utc_datetime],
   ex_wapp_store_path: Path.expand("var/ex_wapp/default.etf")
 
-config :ex_wapp, :runtime,
-  transport: [
-    connect_timeout_ms: 15_000,
-    recv_timeout_ms: :infinity
-  ],
-  iq: [
-    default_timeout_ms: 60_000,
-    prekey_timeout_ms: 60_000,
-    usync_timeout_ms: 30_000,
-    group_info_timeout_ms: 15_000
-  ],
-  signal: [
-    session_max_age_ms: :timer.hours(3)
-  ],
-  app_state: [
-    initial_sync_enabled: false
-  ],
-  protocol: [
-    client_version: "2.3000.1041871181",
-    pairing_device_props: [
-      os: "Mac OS",
-      platform_type: 1,
-      require_full_sync: false
-    ],
-    user_agent: [
-      os_version: "0.1",
-      manufacturer: "",
-      device_name: "Desktop",
-      os_build: "0.1",
-      locale_language: "en",
-      locale_country: "US"
-    ]
-  ]
+# Keep ExWapp's protocol, client identity, IQ and sync defaults intact. This demo
+# exercises the library exactly as a consumer such as Isma does; overriding the
+# WhatsApp Web version or capabilities here can make authentication succeed while
+# later USync/prekey IQ requests are silently ignored by the server.
 
 config :demo_ex_wapp, DemoExWappWeb.Endpoint,
   url: [host: "localhost"],
