@@ -45,6 +45,9 @@ button, input, select { font: inherit; }
 .button.wide { width: 100%; margin-top: 18px; padding: 14px; }
 .group-warning { margin-top: 14px !important; padding: 12px 14px; border: 1px solid #806824; border-radius: 10px; background: #2d260d; color: #f4d77a !important; }
 .group-warning code { color: #fff0b5; }
+.selected-chat { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-top: 12px; color: #dff5eb; }
+.selected-chat span { color: var(--green); font-weight: 800; }
+.selected-chat small { width: 100%; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .qr-wrap { grid-column: 1 / -1; text-align: center; border-top: 1px solid var(--border); padding-top: 22px; }
 .qr { width: min(360px, 100%); margin: 0 auto 12px; padding: 18px; background: white; border-radius: 16px; overflow: hidden; }
 .qr svg { display: block; width: 100%; height: auto; aspect-ratio: 1 / 1; }

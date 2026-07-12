@@ -74,8 +74,19 @@ defmodule DemoExWappWeb.DashboardLive do
 
   def handle_event("run_suite", _params, %{assigns: %{selected_jid: jid}} = socket)
       when is_binary(jid) and jid != "" do
-    Logger.info("Run suite clicked", target_jid: jid)
-    {:noreply, execute(socket, "Automatic test suite started", fn -> WhatsApp.run_suite(jid) end)}
+    if lid_jid?(jid) do
+      Logger.warning("Run suite blocked for unresolved LID", target_jid: jid)
+
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "This chat is still an unresolved LID. Refresh chats to sync its name and phone number."
+       )}
+    else
+      Logger.info("Run suite clicked", target_jid: jid)
+      {:noreply, execute(socket, "Automatic test suite started", fn -> WhatsApp.run_suite(jid) end)}
+    end
   end
 
   def handle_event("run_suite", _params, socket) do
@@ -203,13 +214,25 @@ defmodule DemoExWappWeb.DashboardLive do
             <code>w:g2</code> request lifecycle.
           </p>
 
+          <p :if={lid_jid?(@selected_jid)} class="group-warning">
+            This direct chat is still identified only by a WhatsApp LID. Refresh chats to sync the
+            contact directory and resolve its name and phone number before sending.
+          </p>
+
+          <div :if={chat = selected_chat(@state.chats, @selected_jid)} class="selected-chat">
+            <strong>Selected:</strong> {chat.label}
+            <span :if={chat.phone_number}>+{chat.phone_number}</span>
+            <small>send target: {chat.jid}</small>
+          </div>
+
           <button
             id="run-suite-button"
             type="button"
             phx-click="run_suite"
             class="button primary wide"
             disabled={
-              @state.connection_status != :connected or @state.suite_running? or empty?(@selected_jid)
+              @state.connection_status != :connected or @state.suite_running? or
+                empty?(@selected_jid) or lid_jid?(@selected_jid)
             }
           >
             Run automatic media, GPS, contact and event suite
@@ -320,18 +343,25 @@ defmodule DemoExWappWeb.DashboardLive do
   end
 
   @spec first_chat_jid([map()]) :: String.t()
-  defp first_chat_jid([first | _rest] = chats) do
-    case Enum.find(chats, &(not Map.get(&1, :is_group?, false))) do
-      nil -> first.jid
+  defp first_chat_jid(chats) when is_list(chats) do
+    case Enum.find(chats, &sendable_direct_chat?/1) do
+      nil -> ""
       direct_chat -> direct_chat.jid
     end
   end
 
-  defp first_chat_jid([]), do: ""
+  @spec sendable_direct_chat?(map()) :: boolean()
+  defp sendable_direct_chat?(chat) do
+    not Map.get(chat, :is_group?, false) and not lid_jid?(chat.jid) and
+      String.ends_with?(chat.jid, "@s.whatsapp.net") and chat.jid != "0@s.whatsapp.net"
+  end
 
   @spec preserve_or_select(String.t(), [map()]) :: String.t()
   defp preserve_or_select("", chats), do: first_chat_jid(chats)
-  defp preserve_or_select(selected, _chats), do: selected
+
+  defp preserve_or_select(selected, chats) do
+    if Enum.any?(chats, &(&1.jid == selected)), do: selected, else: first_chat_jid(chats)
+  end
 
   @spec assign_target(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_target(socket, jid) do
@@ -347,11 +377,28 @@ defmodule DemoExWappWeb.DashboardLive do
 
   @spec chat_option_label(map()) :: String.t()
   defp chat_option_label(%{is_group?: true} = chat), do: "[Group] #{chat.label} — #{chat.jid}"
-  defp chat_option_label(chat), do: "#{chat.label} — #{chat.jid}"
+
+  defp chat_option_label(chat) do
+    number = if chat.phone_number, do: "+#{chat.phone_number}", else: nil
+
+    ["[Direct]", chat.label, number]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.join(" ")
+  end
+
+  @spec selected_chat([map()], String.t()) :: map() | nil
+  defp selected_chat(chats, jid), do: Enum.find(chats, &(&1.jid == jid))
 
   @spec group_jid?(term()) :: boolean()
   defp group_jid?(jid) when is_binary(jid), do: String.ends_with?(jid, "@g.us")
   defp group_jid?(_jid), do: false
+
+  @spec lid_jid?(term()) :: boolean()
+  defp lid_jid?(jid) when is_binary(jid),
+    do: String.ends_with?(jid, ["@lid", "@hosted.lid"])
+
+  defp lid_jid?(_jid), do: false
 
   @spec connect_busy?(atom()) :: boolean()
   defp connect_busy?(status),

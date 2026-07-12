@@ -23,8 +23,8 @@ defmodule DemoExWapp.TestSuite do
 
     case run_operation(preflight, jid) do
       {:failed, reason} when is_binary(jid) ->
-        if group_jid?(jid) and group_preflight_failed?(reason) do
-          block_group_operations(remaining, jid, reason)
+        if shared_preflight_failed?(reason) do
+          block_operations(remaining, jid, reason)
         else
           Enum.each(remaining, &run_operation(&1, jid))
         end
@@ -153,15 +153,17 @@ defmodule DemoExWapp.TestSuite do
     {:failed, other}
   end
 
-  @spec block_group_operations([operation()], String.t(), term()) :: :ok
-  defp block_group_operations(operations, jid, reason) do
-    detail =
-      "Blocked by group metadata preflight: #{inspect(reason)}. " <>
-        "Choose a direct @s.whatsapp.net chat to validate media encoding independently."
+  @spec block_operations([operation()], String.t(), term()) :: :ok
+  defp block_operations(operations, jid, reason) do
+    target_type = if group_jid?(jid), do: :group, else: :direct
 
-    Logger.error("Group suite blocked after text preflight",
+    detail =
+      "Blocked by #{target_type} send preflight: #{inspect(reason)}. " <>
+        "The remaining message types use the same device/session fanout."
+
+    Logger.error("Suite blocked after shared send preflight",
       target_jid: jid,
-      target_type: :group,
+      target_type: target_type,
       reason: inspect(reason)
     )
 
@@ -170,10 +172,14 @@ defmodule DemoExWapp.TestSuite do
     end)
   end
 
-  @spec group_preflight_failed?(term()) :: boolean()
-  defp group_preflight_failed?({:group_send_failed, _reason}), do: true
-  defp group_preflight_failed?({:exit, {:timeout, {GenServer, :call, _details}}}), do: true
-  defp group_preflight_failed?(_reason), do: false
+  @spec shared_preflight_failed?(term()) :: boolean()
+  defp shared_preflight_failed?({:group_send_failed, _reason}), do: true
+  defp shared_preflight_failed?({:session_failed, _reason}), do: true
+  defp shared_preflight_failed?({:unresolved_lid, _jid}), do: true
+  defp shared_preflight_failed?({:not_connected, _status}), do: true
+  defp shared_preflight_failed?({:send_worker_start_failed, _reason}), do: true
+  defp shared_preflight_failed?({:exit, {:timeout, {GenServer, :call, _details}}}), do: true
+  defp shared_preflight_failed?(_reason), do: false
 
   @spec group_jid?(String.t()) :: boolean()
   defp group_jid?(jid), do: String.ends_with?(jid, "@g.us")

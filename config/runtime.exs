@@ -1,7 +1,7 @@
 import Config
 
 ex_wapp_debug =
-  System.get_env("EX_WAPP_DEBUG", "false")
+  System.get_env("EX_WAPP_DEBUG", if(config_env() == :dev, do: "true", else: "false"))
   |> String.downcase()
   |> then(&(&1 in ["1", "true", "yes", "on"]))
 

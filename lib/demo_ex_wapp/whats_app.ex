@@ -82,7 +82,7 @@ defmodule DemoExWapp.WhatsApp do
 
   @doc "Loads chats from the active ExWapp session into the LiveView state."
   @spec refresh_chats() :: :ok | {:error, term()}
-  def refresh_chats, do: GenServer.call(__MODULE__, :refresh_chats, 35_000)
+  def refresh_chats, do: GenServer.call(__MODULE__, :refresh_chats, 70_000)
 
   @doc "Starts the automatic outbound test suite in a supervised task."
   @spec run_suite(String.t()) :: :ok | {:error, term()}
@@ -161,7 +161,9 @@ defmodule DemoExWapp.WhatsApp do
 
     result =
       with_session(fn session ->
-        normalize_chats(ExWapp.list_chats(session))
+        chats = ExWapp.list_chats(session)
+        contacts = maybe_sync_contacts(session, chats, ExWapp.list_contacts(session))
+        normalize_chats(chats, contacts)
       end)
 
     case result do
@@ -572,13 +574,52 @@ defmodule DemoExWapp.WhatsApp do
     :ok
   end
 
-  @spec normalize_chats(term()) :: {:ok, [map()]} | {:error, term()}
-  defp normalize_chats({:ok, chats}), do: normalize_chats(chats)
+  @spec maybe_sync_contacts(pid(), [ExWapp.Chat.chat()], [ExWapp.Contact.t()]) ::
+          [ExWapp.Contact.t()]
+  defp maybe_sync_contacts(session, chats, contacts) do
+    if contact_sync_needed?(chats, contacts) do
+      result = safe_sync_contacts(session)
 
-  defp normalize_chats(chats) when is_list(chats) do
+      Logger.info("WhatsApp contact sync for chat resolution finished",
+        result: inspect(result),
+        count: length(contacts)
+      )
+
+      ExWapp.list_contacts(session)
+    else
+      contacts
+    end
+  end
+
+  @spec safe_sync_contacts(pid()) :: :ok | {:error, term()}
+  defp safe_sync_contacts(session) do
+    ExWapp.sync_contacts(session)
+  rescue
+    exception -> {:error, {:exception, Exception.message(exception)}}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  @spec contact_sync_needed?([ExWapp.Chat.chat()], [ExWapp.Contact.t()]) :: boolean()
+  defp contact_sync_needed?(chats, contacts) do
+    index = contact_index(contacts)
+
+    contacts == [] or
+      Enum.any?(chats, fn chat ->
+        jid = chat |> Map.get(:jid) |> normalize_jid()
+        lid_jid?(jid) and not Map.has_key?(index, jid)
+      end)
+  end
+
+  @spec normalize_chats(term(), term()) :: {:ok, [map()]} | {:error, term()}
+  defp normalize_chats({:ok, chats}, contacts), do: normalize_chats(chats, contacts)
+
+  defp normalize_chats(chats, contacts) when is_list(chats) and is_list(contacts) do
+    index = contact_index(contacts)
+
     normalized =
       chats
-      |> Enum.map(&normalize_chat/1)
+      |> Enum.map(&normalize_chat(&1, index))
       |> Enum.reject(&(&1.jid == ""))
       |> Enum.uniq_by(& &1.jid)
       |> Enum.sort_by(& &1.last_message_timestamp, :desc)
@@ -586,38 +627,117 @@ defmodule DemoExWapp.WhatsApp do
     {:ok, normalized}
   end
 
-  defp normalize_chats({:error, reason}), do: {:error, reason}
-  defp normalize_chats(other), do: {:error, {:unexpected_chats_result, other}}
+  defp normalize_chats({:error, reason}, _contacts), do: {:error, reason}
 
-  @spec normalize_chat(ExWapp.Chat.chat()) :: map()
-  defp normalize_chat(%ExWapp.Chat{} = chat) do
-    jid = normalize_jid(chat.jid)
+  defp normalize_chats(chats, contacts),
+    do: {:error, {:unexpected_chat_directory, chats, contacts}}
+
+  @spec contact_index([ExWapp.Contact.t()]) :: %{String.t() => ExWapp.Contact.t()}
+  defp contact_index(contacts) do
+    Enum.reduce(contacts, %{}, fn
+      %ExWapp.Contact{} = contact, index ->
+        [normalize_jid(contact.jid), normalize_lid(contact.lid)]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.reduce(index, &Map.put(&2, &1, contact))
+
+      _contact, index ->
+        index
+    end)
+  end
+
+  @spec normalize_chat(ExWapp.Chat.chat() | map(), map()) :: map()
+  defp normalize_chat(%ExWapp.Chat{} = chat, contact_index) do
+    chat_jid = normalize_jid(chat.jid)
+    contact = Map.get(contact_index, chat_jid)
+    group? = chat.is_group || false
+    target_jid = target_jid(chat_jid, contact, group?)
 
     %{
-      jid: jid,
-      label: chat_label(chat, jid),
+      jid: target_jid,
+      chat_jid: chat_jid,
+      label: chat_label(chat, contact, chat_jid),
+      phone_number: contact_phone(contact, target_jid),
       unread_count: chat.unread_count || 0,
-      is_group?: chat.is_group || false,
+      is_group?: group?,
       last_message_timestamp: chat.last_message_timestamp || 0
     }
   end
 
-  defp normalize_chat(other) do
-    jid = other |> Map.get(:jid) |> normalize_jid()
+  defp normalize_chat(other, contact_index) do
+    chat_jid = other |> Map.get(:jid) |> normalize_jid()
+    contact = Map.get(contact_index, chat_jid)
+    group? = Map.get(other, :is_group, false)
+    target_jid = target_jid(chat_jid, contact, group?)
 
     %{
-      jid: jid,
-      label: other |> Map.get(:name) |> present_string() || jid,
+      jid: target_jid,
+      chat_jid: chat_jid,
+      label:
+        other |> Map.get(:name) |> present_string() || contact_label(contact) || chat_jid,
+      phone_number: contact_phone(contact, target_jid),
       unread_count: Map.get(other, :unread_count, 0),
-      is_group?: Map.get(other, :is_group, false),
+      is_group?: group?,
       last_message_timestamp: Map.get(other, :last_message_timestamp, 0) || 0
     }
   end
 
-  @spec chat_label(ExWapp.Chat.chat(), String.t()) :: String.t()
-  defp chat_label(%ExWapp.Chat{} = chat, jid) do
-    present_string(chat.name) || jid
+  @spec target_jid(String.t(), ExWapp.Contact.t() | nil, boolean()) :: String.t()
+  defp target_jid(chat_jid, _contact, true), do: chat_jid
+
+  defp target_jid(chat_jid, %ExWapp.Contact{} = contact, false),
+    do: present_string(contact.jid) || chat_jid
+
+  defp target_jid(chat_jid, nil, false), do: chat_jid
+
+  @spec chat_label(ExWapp.Chat.chat(), ExWapp.Contact.t() | nil, String.t()) :: String.t()
+  defp chat_label(%ExWapp.Chat{} = chat, contact, chat_jid) do
+    present_string(chat.name) || contact_label(contact) || unresolved_chat_label(chat_jid)
   end
+
+  @spec contact_label(ExWapp.Contact.t() | nil) :: String.t() | nil
+  defp contact_label(%ExWapp.Contact{} = contact) do
+    [contact.full_name, contact.push_name, contact.first_name, contact.username]
+    |> Enum.find_value(&present_string/1)
+  end
+
+  defp contact_label(nil), do: nil
+
+  @spec contact_phone(ExWapp.Contact.t() | nil, String.t()) :: String.t() | nil
+  defp contact_phone(%ExWapp.Contact{} = contact, target_jid) do
+    present_string(contact.phone_number) || phone_from_jid(target_jid)
+  end
+
+  defp contact_phone(nil, target_jid), do: phone_from_jid(target_jid)
+
+  @spec phone_from_jid(String.t()) :: String.t() | nil
+  defp phone_from_jid(jid) do
+    case String.split(jid, "@", parts: 2) do
+      [number, "s.whatsapp.net"] when number != "" and number != "0" -> number
+      _parts -> nil
+    end
+  end
+
+  @spec unresolved_chat_label(String.t()) :: String.t()
+  defp unresolved_chat_label(jid) do
+    if lid_jid?(jid), do: "Unknown contact (#{jid})", else: jid
+  end
+
+  @spec normalize_lid(term()) :: String.t()
+  defp normalize_lid(lid) when is_binary(lid) do
+    lid = String.trim(lid)
+
+    cond do
+      lid == "" -> ""
+      String.contains?(lid, "@") -> normalize_jid(lid)
+      true -> "#{lid}@lid"
+    end
+  end
+
+  defp normalize_lid(%ExWapp.JID{} = lid), do: normalize_jid(lid)
+  defp normalize_lid(_lid), do: ""
+
+  @spec lid_jid?(String.t()) :: boolean()
+  defp lid_jid?(jid), do: String.ends_with?(jid, ["@lid", "@hosted.lid"])
 
   @spec present_string(term()) :: String.t() | nil
   defp present_string(value) when is_binary(value) do
@@ -633,16 +753,29 @@ defmodule DemoExWapp.WhatsApp do
   defp verify_inbound_message(_jid, %{from_me: true}), do: :ok
 
   defp verify_inbound_message(jid, message) do
-    selected_jid = SessionState.snapshot().selected_jid
+    snapshot = SessionState.snapshot()
+    selected_jid = snapshot.selected_jid
+    source_jid = normalize_jid(jid)
+    aliases = active_chat_aliases(snapshot.chats, selected_jid)
 
-    if selected_jid not in [nil, ""] and normalize_jid(jid) == selected_jid do
+    if selected_jid not in [nil, ""] and source_jid in aliases do
       verify_selected_message(message)
     else
       Logger.debug("Inbound message does not match the active test target",
-        source_jid: normalize_jid(jid),
+        source_jid: source_jid,
         target_jid: selected_jid
       )
     end
+  end
+
+  @spec active_chat_aliases([map()], String.t() | nil) :: [String.t()]
+  defp active_chat_aliases(chats, selected_jid) do
+    case Enum.find(chats, &(&1.jid == selected_jid)) do
+      nil -> [selected_jid]
+      chat -> [chat.jid, Map.get(chat, :chat_jid)]
+    end
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
   end
 
   @spec verify_selected_message(map()) :: :ok
