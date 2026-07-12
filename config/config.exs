@@ -1,16 +1,16 @@
-# This file is responsible for configuring your application
-# and its dependencies with the aid of the Config module.
-#
-# This configuration file is loaded before any dependency and
-# is restricted to this project.
-
-# General application configuration
 import Config
 
 config :demo_ex_wapp,
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  ex_wapp_store_path: Path.expand("var/ex_wapp/default.etf")
 
-# Configure the endpoint
+config :ex_wapp, :runtime,
+  transport: [
+    connect_timeout_ms: 15_000,
+    recv_timeout_ms: :infinity
+  ],
+  signal: [session_max_age_ms: :timer.hours(3)]
+
 config :demo_ex_wapp, DemoExWappWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
@@ -19,37 +19,42 @@ config :demo_ex_wapp, DemoExWappWeb.Endpoint,
     layout: false
   ],
   pubsub_server: DemoExWapp.PubSub,
-  live_view: [signing_salt: "GSPqOjmE"]
+  live_view: [signing_salt: "demo-ex-wapp-live"]
 
-# Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
   demo_ex_wapp: [
-    args:
-      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+    args: ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
-# Configure tailwind (the version is required)
 config :tailwind,
   version: "4.1.12",
   demo_ex_wapp: [
-    args: ~w(
-      --input=assets/css/app.css
-      --output=priv/static/assets/css/app.css
-    ),
+    args: ~w(--input=assets/css/app.css --output=priv/static/assets/app.css),
     cd: Path.expand("..", __DIR__)
   ]
 
-# Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [
+    :request_id,
+    :session_id,
+    :connection_status,
+    :target_jid,
+    :source_jid,
+    :message_id,
+    :content_type,
+    :media_type,
+    :test,
+    :status,
+    :reason,
+    :detail,
+    :filename,
+    :bytes
+  ]
 
-# Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-# Import environment specific config. This must remain at the bottom
-# of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

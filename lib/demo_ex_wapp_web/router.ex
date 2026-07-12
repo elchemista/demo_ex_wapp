@@ -10,18 +10,10 @@ defmodule DemoExWappWeb.Router do
     plug :put_secure_browser_headers
   end
 
-  pipeline :api do
-    plug :accepts, ["json"]
-  end
-
   scope "/", DemoExWappWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", DashboardLive, :index
+    get "/downloads/:token", DownloadController, :show
   end
-
-  # Other scopes may use custom stacks.
-  # scope "/api", DemoExWappWeb do
-  #   pipe_through :api
-  # end
 end
