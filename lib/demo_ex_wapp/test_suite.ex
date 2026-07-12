@@ -129,8 +129,23 @@ defmodule DemoExWapp.TestSuite do
   end
 
   defp record_result({:ok, id}, test, jid) do
-    :ok = pass(test, jid, "message_id=#{id}")
-    :passed
+    case WhatsApp.await_message_ack(jid, id) do
+      {:ok, status} ->
+        :ok = pass(test, jid, "message_id=#{id} server_ack=#{status}")
+        :passed
+
+      {:error, reason} ->
+        detail = "message_id=#{id} #{inspect(reason)}"
+
+        Logger.error("WhatsApp rejected or did not acknowledge test message",
+          test: test,
+          target_jid: jid,
+          reason: detail
+        )
+
+        :ok = SessionState.mark_test(test, :failed, detail)
+        {:failed, reason}
+    end
   end
 
   defp record_result({:error, reason}, test, jid) do
