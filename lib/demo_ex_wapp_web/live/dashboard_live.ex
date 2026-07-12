@@ -1,5 +1,5 @@
 defmodule DemoExWappWeb.DashboardLive do
-  @moduledoc "One-page QR, contact selection, and ExWapp feature test dashboard."
+  @moduledoc "One-page QR, chat selection, and ExWapp feature test dashboard."
 
   use DemoExWappWeb, :live_view
 
@@ -38,7 +38,7 @@ defmodule DemoExWappWeb.DashboardLive do
      socket
      |> assign(:page_title, "ExWapp feature test")
      |> assign(:state, state)
-     |> assign_target(first_contact_jid(state.contacts))}
+     |> assign_target(first_chat_jid(state.chats))}
   end
 
   @impl true
@@ -57,12 +57,12 @@ defmodule DemoExWappWeb.DashboardLive do
     {:noreply, execute(socket, "Pairing data reset", &WhatsApp.reset_pairing/0)}
   end
 
-  def handle_event("refresh_contacts", _params, socket) do
-    Logger.info("Refresh contacts clicked")
-    {:noreply, execute(socket, "Contacts refreshed", &WhatsApp.refresh_contacts/0)}
+  def handle_event("refresh_chats", _params, socket) do
+    Logger.info("Refresh chats clicked")
+    {:noreply, execute(socket, "Chats refreshed", &WhatsApp.refresh_chats/0)}
   end
 
-  def handle_event("select_contact", %{"contact_target" => %{"jid" => jid}}, socket) do
+  def handle_event("select_chat", %{"chat_target" => %{"jid" => jid}}, socket) do
     Logger.info("Test target selected", target_jid: jid)
     {:noreply, assign_target(socket, String.trim(jid))}
   end
@@ -80,12 +80,12 @@ defmodule DemoExWappWeb.DashboardLive do
 
   def handle_event("run_suite", _params, socket) do
     Logger.warning("Run suite clicked without a target")
-    {:noreply, put_flash(socket, :error, "Choose a contact or enter a WhatsApp JID first.")}
+    {:noreply, put_flash(socket, :error, "Choose a chat or enter a WhatsApp JID first.")}
   end
 
   @impl true
   def handle_info({SessionState, :changed, state}, socket) do
-    selected_jid = preserve_or_select(socket.assigns.selected_jid, state.contacts)
+    selected_jid = preserve_or_select(socket.assigns.selected_jid, state.chats)
     {:noreply, socket |> assign(:state, state) |> assign_target(selected_jid)}
   end
 
@@ -100,113 +100,157 @@ defmodule DemoExWappWeb.DashboardLive do
 
     ~H"""
     <Layouts.app flash={@flash}>
-    <div class="dashboard">
-      <header class="hero">
-        <div>
-          <p class="eyebrow">EXWAPP FEATURE HARNESS</p>
-          <h1>WhatsApp integration test</h1>
-          <p>Pair one device, choose a contact, then send and verify every new structured message.</p>
-        </div>
-        <div class={"status status-#{@state.connection_status}"}>
-          <span></span>{@state.connection_status}
-        </div>
-      </header>
-
-      <%= if @state.last_error do %>
-        <section class="alert"><strong>Last error</strong><pre>{@state.last_error}</pre></section>
-      <% end %>
-
-      <section class="card connect-card">
-        <div>
-          <h2>1. Connect the device</h2>
-          <p>Press Start test. If this store is not paired yet, scan the QR from WhatsApp Linked devices.</p>
-        </div>
-        <div class="actions">
-          <button phx-click="start_test" class="button primary" disabled={connect_busy?(@state.connection_status)}>
-            Start test
-          </button>
-          <button phx-click="disconnect" class="button">Disconnect</button>
-          <button phx-click="reset_pairing" class="button danger" data-confirm="Delete the saved pairing and require a new QR?">
-            Reset pairing
-          </button>
-        </div>
-        <%= if @state.qr_svg do %>
-          <div class="qr-wrap">
-            <div class="qr">{Phoenix.HTML.raw(@state.qr_svg)}</div>
-            <p>WhatsApp → Settings → Linked devices → Link a device</p>
-          </div>
-        <% end %>
-      </section>
-
-      <section class="card" id="target">
-        <div class="section-heading">
+      <div class="dashboard">
+        <header class="hero">
           <div>
-            <h2>2. Choose the test chat</h2>
-            <p>The automatic suite sends its fixtures to this contact.</p>
+            <p class="eyebrow">EXWAPP FEATURE HARNESS</p>
+            <h1>WhatsApp integration test</h1>
+            <p>
+              Pair one device, choose a chat, then send and verify every new structured message.
+            </p>
           </div>
-          <button phx-click="refresh_contacts" class="button" disabled={@state.connection_status != :connected}>
-            Refresh contacts
-          </button>
-        </div>
-
-        <div class="target-form">
-          <.form for={@contact_form} id="contact-target-form" phx-change="select_contact">
-            <.input
-              field={@contact_form[:jid]}
-              type="select"
-              label="Synced contact"
-              prompt="Choose a contact…"
-              options={contact_options(@state.contacts)}
-              disabled={@state.contacts == []}
-            />
-          </.form>
-          <.form for={@manual_form} id="manual-target-form" phx-change="type_target">
-            <.input
-              field={@manual_form[:jid]}
-              type="text"
-              label="Or enter a JID manually"
-              placeholder="393331234567@s.whatsapp.net"
-              phx-debounce="250"
-            />
-          </.form>
-        </div>
-
-        <button
-          phx-click="run_suite"
-          class="button primary wide"
-          disabled={@state.connection_status != :connected or @state.suite_running? or empty?(@selected_jid)}
-        >
-          Run automatic media, GPS, contact and event suite
-        </button>
-      </section>
-
-      <section class="check-grid">
-        <.checklist title="Automatic sends" subtitle="Marked as soon as ExWapp returns a result" tests={@send_tests} results={@state.tests} />
-        <.checklist title="Replies to send from WhatsApp" subtitle="Reply with each type; downloads and decoding run automatically" tests={@receive_tests} results={@state.tests} />
-      </section>
-
-      <%= if map_size(@state.downloads) > 0 do %>
-        <section class="card" id="downloads">
-          <h2>Downloaded replies</h2>
-          <div class="download-grid">
-            <.download :for={{type, item} <- @state.downloads} type={type} item={item} />
+          <div class={"status status-#{@state.connection_status}"}>
+            <span></span>{@state.connection_status}
           </div>
-          <p class="hint">Decrypted files remain available in memory for ten minutes.</p>
+        </header>
+
+        <%= if @state.last_error do %>
+          <section class="alert"><strong>Last error</strong><pre>{@state.last_error}</pre></section>
+        <% end %>
+
+        <section class="card connect-card">
+          <div>
+            <h2>1. Connect the device</h2>
+            <p>
+              Press Start test. If this store is not paired yet, scan the QR from WhatsApp Linked devices.
+            </p>
+          </div>
+          <div class="actions">
+            <button
+              id="start-test-button"
+              type="button"
+              phx-click="start_test"
+              phx-disable-with="Starting..."
+              class="button primary"
+              disabled={connect_busy?(@state.connection_status)}
+            >
+              Start test
+            </button>
+            <button id="disconnect-button" type="button" phx-click="disconnect" class="button">
+              Disconnect
+            </button>
+            <button
+              id="reset-pairing-button"
+              type="button"
+              phx-click="reset_pairing"
+              class="button danger"
+              data-confirm="Delete the saved pairing and require a new QR?"
+            >
+              Reset pairing
+            </button>
+          </div>
+          <%= if @state.qr_svg do %>
+            <div class="qr-wrap">
+              <div class="qr">{Phoenix.HTML.raw(@state.qr_svg)}</div>
+              <p>WhatsApp → Settings → Linked devices → Link a device</p>
+            </div>
+          <% end %>
         </section>
-      <% end %>
 
-      <section class="card logs-card">
-        <div class="section-heading">
-          <div><h2>Recent inbound messages</h2><p>Raw decoded values useful when copying an error report.</p></div>
-          <span class="count">{length(@state.messages)}</span>
-        </div>
-        <div :if={@state.messages == []} class="empty-state">No inbound messages yet.</div>
-        <details :for={entry <- @state.messages} class="message-log">
-          <summary>{entry.jid} · {format_time(entry.received_at)} · {content_label(entry.message)}</summary>
-          <pre>{inspect(entry.message, pretty: true, limit: 60, printable_limit: 8_000)}</pre>
-        </details>
-      </section>
-    </div>
+        <section class="card" id="target">
+          <div class="section-heading">
+            <div>
+              <h2>2. Choose the test chat</h2>
+              <p>The automatic suite sends its fixtures to this chat.</p>
+            </div>
+            <button
+              id="refresh-chats-button"
+              type="button"
+              phx-click="refresh_chats"
+              class="button"
+              disabled={@state.connection_status != :connected}
+            >
+              Refresh chats
+            </button>
+          </div>
+
+          <div class="target-form">
+            <.form for={@chat_form} id="chat-target-form" phx-change="select_chat">
+              <.input
+                field={@chat_form[:jid]}
+                type="select"
+                label="Synced chat"
+                prompt="Choose a chat…"
+                options={chat_options(@state.chats)}
+                disabled={@state.chats == []}
+              />
+            </.form>
+            <.form for={@manual_form} id="manual-target-form" phx-change="type_target">
+              <.input
+                field={@manual_form[:jid]}
+                type="text"
+                label="Or enter a JID manually"
+                placeholder="393331234567@s.whatsapp.net"
+                phx-debounce="250"
+              />
+            </.form>
+          </div>
+
+          <button
+            id="run-suite-button"
+            type="button"
+            phx-click="run_suite"
+            class="button primary wide"
+            disabled={
+              @state.connection_status != :connected or @state.suite_running? or empty?(@selected_jid)
+            }
+          >
+            Run automatic media, GPS, contact and event suite
+          </button>
+        </section>
+
+        <section class="check-grid">
+          <.checklist
+            title="Automatic sends"
+            subtitle="Marked as soon as ExWapp returns a result"
+            tests={@send_tests}
+            results={@state.tests}
+          />
+          <.checklist
+            title="Replies to send from WhatsApp"
+            subtitle="Reply with each type; downloads and decoding run automatically"
+            tests={@receive_tests}
+            results={@state.tests}
+          />
+        </section>
+
+        <%= if map_size(@state.downloads) > 0 do %>
+          <section class="card" id="downloads">
+            <h2>Downloaded replies</h2>
+            <div class="download-grid">
+              <.download :for={{type, item} <- @state.downloads} type={type} item={item} />
+            </div>
+            <p class="hint">Decrypted files remain available in memory for ten minutes.</p>
+          </section>
+        <% end %>
+
+        <section class="card logs-card">
+          <div class="section-heading">
+            <div>
+              <h2>Recent inbound messages</h2>
+              <p>Raw decoded values useful when copying an error report.</p>
+            </div>
+            <span class="count">{length(@state.messages)}</span>
+          </div>
+          <div :if={@state.messages == []} class="empty-state">No inbound messages yet.</div>
+          <details :for={entry <- @state.messages} class="message-log">
+            <summary>
+              {entry.jid} · {format_time(entry.received_at)} · {content_label(entry.message)}
+            </summary>
+            <pre>{inspect(entry.message, pretty: true, limit: 60, printable_limit: 8_000)}</pre>
+          </details>
+        </section>
+      </div>
     </Layouts.app>
     """
   end
@@ -220,11 +264,14 @@ defmodule DemoExWappWeb.DashboardLive do
   defp checklist(assigns) do
     ~H"""
     <section class="card checklist">
-      <h2>{@title}</h2><p>{@subtitle}</p>
+      <h2>{@title}</h2>
+      <p>{@subtitle}</p>
       <ul>
         <li :for={{key, label} <- @tests} class={"check check-#{@results[key].status}"}>
           <span class="check-icon">{status_icon(@results[key].status)}</span>
-          <span><strong>{label}</strong><small :if={@results[key].detail}>{@results[key].detail}</small></span>
+          <span>
+            <strong>{label}</strong><small :if={@results[key].detail}>{@results[key].detail}</small>
+          </span>
         </li>
       </ul>
     </section>
@@ -241,12 +288,15 @@ defmodule DemoExWappWeb.DashboardLive do
       <strong>{String.capitalize(to_string(@type))}</strong>
       <img :if={@type == :image} src={@item.url} alt="Downloaded WhatsApp reply" />
       <audio :if={@type == :audio} controls preload="metadata" src={@item.url}></audio>
-      <a href={@item.url} target="_blank" rel="noopener">Open {@item.filename} ({@item.byte_size} bytes)</a>
+      <a href={@item.url} target="_blank" rel="noopener">
+        Open {@item.filename} ({@item.byte_size} bytes)
+      </a>
     </article>
     """
   end
 
-  @spec execute(Phoenix.LiveView.Socket.t(), String.t(), (-> term())) :: Phoenix.LiveView.Socket.t()
+  @spec execute(Phoenix.LiveView.Socket.t(), String.t(), (-> term())) ::
+          Phoenix.LiveView.Socket.t()
   defp execute(socket, success_message, operation) do
     case operation.() do
       :ok -> put_flash(socket, :info, success_message)
@@ -255,32 +305,36 @@ defmodule DemoExWappWeb.DashboardLive do
     end
   rescue
     exception ->
-      Logger.error("Dashboard operation raised", reason: Exception.format(:error, exception, __STACKTRACE__))
+      Logger.error("Dashboard operation raised",
+        reason: Exception.format(:error, exception, __STACKTRACE__)
+      )
+
       put_flash(socket, :error, Exception.message(exception))
   end
 
-  @spec first_contact_jid([map()]) :: String.t()
-  defp first_contact_jid([first | _rest]), do: first.jid
-  defp first_contact_jid([]), do: ""
+  @spec first_chat_jid([map()]) :: String.t()
+  defp first_chat_jid([first | _rest]), do: first.jid
+  defp first_chat_jid([]), do: ""
 
   @spec preserve_or_select(String.t(), [map()]) :: String.t()
-  defp preserve_or_select("", contacts), do: first_contact_jid(contacts)
-  defp preserve_or_select(selected, _contacts), do: selected
+  defp preserve_or_select("", chats), do: first_chat_jid(chats)
+  defp preserve_or_select(selected, _chats), do: selected
 
   @spec assign_target(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
   defp assign_target(socket, jid) do
     socket
     |> assign(:selected_jid, jid)
-    |> assign(:contact_form, to_form(%{"jid" => jid}, as: :contact_target))
+    |> assign(:chat_form, to_form(%{"jid" => jid}, as: :chat_target))
     |> assign(:manual_form, to_form(%{"jid" => jid}, as: :manual_target))
   end
 
-  @spec contact_options([map()]) :: [{String.t(), String.t()}]
-  defp contact_options(contacts),
-    do: Enum.map(contacts, &{"#{&1.label} — #{&1.jid}", &1.jid})
+  @spec chat_options([map()]) :: [{String.t(), String.t()}]
+  defp chat_options(chats),
+    do: Enum.map(chats, &{"#{&1.label} — #{&1.jid}", &1.jid})
 
   @spec connect_busy?(atom()) :: boolean()
-  defp connect_busy?(status), do: status in [:connecting, :pairing, :handshaking, :syncing, :connected, :reconnecting]
+  defp connect_busy?(status),
+    do: status in [:connecting, :pairing, :handshaking, :syncing, :connected, :reconnecting]
 
   @spec empty?(term()) :: boolean()
   defp empty?(value), do: not is_binary(value) or String.trim(value) == ""

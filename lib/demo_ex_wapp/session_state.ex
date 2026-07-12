@@ -35,7 +35,11 @@ defmodule DemoExWapp.SessionState do
   ]
 
   @type test_status :: :pending | :running | :passed | :failed
-  @type test_result :: %{status: test_status(), detail: String.t() | nil, updated_at: DateTime.t() | nil}
+  @type test_result :: %{
+          status: test_status(),
+          detail: String.t() | nil,
+          updated_at: DateTime.t() | nil
+        }
   @type snapshot :: map()
 
   @doc "Starts the state process."
@@ -54,10 +58,9 @@ defmodule DemoExWapp.SessionState do
   @spec update(map()) :: :ok
   def update(attrs) when is_map(attrs), do: GenServer.call(__MODULE__, {:update, attrs})
 
-  @doc "Stores the contacts available to the test target selector."
-  @spec put_contacts([map()]) :: :ok
-  def put_contacts(contacts) when is_list(contacts),
-    do: GenServer.call(__MODULE__, {:put_contacts, contacts})
+  @doc "Stores the chats available to the test target selector."
+  @spec put_chats([map()]) :: :ok
+  def put_chats(chats) when is_list(chats), do: GenServer.call(__MODULE__, {:put_chats, chats})
 
   @doc "Resets every test result for a new target."
   @spec reset_tests(String.t()) :: :ok
@@ -93,7 +96,10 @@ defmodule DemoExWapp.SessionState do
   def init(_opts), do: {:ok, default_snapshot()}
 
   @impl true
-  def handle_call(:snapshot, _from, state), do: {:reply, state, state}
+  def handle_call(:snapshot, _from, state) do
+    state = normalize_snapshot(state)
+    {:reply, state, state}
+  end
 
   def handle_call({:update, attrs}, _from, state) do
     state
@@ -101,9 +107,9 @@ defmodule DemoExWapp.SessionState do
     |> reply_and_broadcast()
   end
 
-  def handle_call({:put_contacts, contacts}, _from, state) do
-    Logger.info("WhatsApp contacts loaded", count: length(contacts))
-    reply_and_broadcast(%{state | contacts: contacts})
+  def handle_call({:put_chats, chats}, _from, state) do
+    Logger.info("WhatsApp chats loaded", count: length(chats))
+    reply_and_broadcast(%{state | chats: chats})
   end
 
   def handle_call({:reset_tests, jid}, _from, state) do
@@ -170,7 +176,7 @@ defmodule DemoExWapp.SessionState do
       connection_status: :idle,
       qr_svg: nil,
       last_error: nil,
-      contacts: [],
+      chats: [],
       selected_jid: nil,
       tests: empty_tests(),
       downloads: %{},
@@ -214,7 +220,13 @@ defmodule DemoExWapp.SessionState do
 
   @spec reply_and_broadcast(snapshot()) :: {:reply, :ok, snapshot()}
   defp reply_and_broadcast(state) do
+    state = normalize_snapshot(state)
     :ok = Phoenix.PubSub.broadcast(DemoExWapp.PubSub, @topic, {__MODULE__, :changed, state})
     {:reply, :ok, state}
+  end
+
+  @spec normalize_snapshot(snapshot()) :: snapshot()
+  defp normalize_snapshot(state) do
+    Map.put_new(state, :chats, Map.get(state, :contacts, []))
   end
 end

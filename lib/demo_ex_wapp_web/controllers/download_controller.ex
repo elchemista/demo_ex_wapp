@@ -25,7 +25,10 @@ defmodule DemoExWappWeb.DownloadController do
         |> send_resp(200, item.bytes)
 
       :error ->
-        Logger.warning("Expired or unknown media download token", token_prefix: String.slice(token, 0, 8))
+        Logger.warning("Expired or unknown media download token",
+          token_prefix: String.slice(token, 0, 8)
+        )
+
         send_resp(conn, 404, "This media download expired. Send the media again.")
     end
   end

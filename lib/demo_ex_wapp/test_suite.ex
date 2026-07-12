@@ -114,6 +114,7 @@ defmodule DemoExWapp.TestSuite do
 
   defp record_result(other, test, jid) do
     detail = "Unexpected result: #{inspect(other, limit: 30, printable_limit: 2_000)}"
+
     Logger.error("ExWapp test operation returned an unexpected result",
       test: test,
       target_jid: jid,

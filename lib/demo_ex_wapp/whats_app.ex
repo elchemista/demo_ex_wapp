@@ -15,6 +15,7 @@ defmodule DemoExWapp.WhatsApp do
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
 
   @session_id "demo"
+  @qr_svg_settings %QRCode.Render.SvgSettings{flatten: true}
 
   @doc "Starts the WhatsApp wrapper."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -79,9 +80,9 @@ defmodule DemoExWapp.WhatsApp do
           {:ok, ExWapp.Media.Download.t()} | {:error, term()}
   def download_media(ref), do: with_session(&ExWapp.download_media(&1, ref, []))
 
-  @doc "Loads contacts from the active ExWapp session into the LiveView state."
-  @spec refresh_contacts() :: :ok | {:error, term()}
-  def refresh_contacts, do: GenServer.call(__MODULE__, :refresh_contacts, 35_000)
+  @doc "Loads chats from the active ExWapp session into the LiveView state."
+  @spec refresh_chats() :: :ok | {:error, term()}
+  def refresh_chats, do: GenServer.call(__MODULE__, :refresh_chats, 35_000)
 
   @doc "Starts the automatic outbound test suite in a supervised task."
   @spec run_suite(String.t()) :: :ok | {:error, term()}
@@ -91,7 +92,11 @@ defmodule DemoExWapp.WhatsApp do
 
   @impl true
   def init(_opts) do
-    Logger.info("Starting WhatsApp demo wrapper", session_id: @session_id, store_path: store_path())
+    Logger.info("Starting WhatsApp demo wrapper",
+      session_id: @session_id,
+      store_path: store_path()
+    )
+
     SessionState.update(%{connection_status: :idle})
     {:ok, %{session: nil, qr_task: nil, subscribed?: false}}
   end
@@ -124,6 +129,7 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_call(:disconnect, _from, state) do
     Logger.info("WhatsApp disconnect requested", session_id: @session_id)
+
     with {:ok, session} <- session() do
       ExWapp.disconnect(session)
     end
@@ -134,6 +140,7 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_call(:reset_pairing, _from, state) do
     Logger.warning("WhatsApp pairing reset requested", session_id: @session_id)
+
     with :ok <- stop_session(),
          :ok <- clear_store_files() do
       SessionState.update(%{
@@ -149,23 +156,21 @@ defmodule DemoExWapp.WhatsApp do
     end
   end
 
-  def handle_call(:refresh_contacts, _from, state) do
-    Logger.info("WhatsApp contact refresh requested", session_id: @session_id)
+  def handle_call(:refresh_chats, _from, state) do
+    Logger.info("WhatsApp chat refresh requested", session_id: @session_id)
 
     result =
       with_session(fn session ->
-        sync_result = ExWapp.sync_contacts(session)
-        Logger.info("WhatsApp contact sync finished", result: inspect(sync_result))
-        normalize_contacts(ExWapp.list_contacts(session))
+        normalize_chats(ExWapp.list_chats(session))
       end)
 
     case result do
-      {:ok, contacts} ->
-        :ok = SessionState.put_contacts(contacts)
+      {:ok, chats} ->
+        :ok = SessionState.put_chats(chats)
         {:reply, :ok, state}
 
       {:error, reason} ->
-        Logger.error("WhatsApp contact refresh failed", reason: inspect(reason))
+        Logger.error("WhatsApp chat refresh failed", reason: inspect(reason))
         {:reply, {:error, reason}, state}
     end
   end
@@ -174,7 +179,10 @@ defmodule DemoExWapp.WhatsApp do
     case session() do
       {:ok, _session} ->
         Logger.info("Scheduling automatic ExWapp suite", target_jid: jid)
-        {:ok, _task} = Task.Supervisor.start_child(DemoExWapp.TaskSupervisor, fn -> TestSuite.run(jid) end)
+
+        {:ok, _task} =
+          Task.Supervisor.start_child(DemoExWapp.TaskSupervisor, fn -> TestSuite.run(jid) end)
+
         {:reply, :ok, state}
 
       :error ->
@@ -193,6 +201,7 @@ defmodule DemoExWapp.WhatsApp do
     )
 
     SessionState.add_message(jid, message)
+    schedule_chat_refresh()
     verify_inbound_message(jid, message)
     {:noreply, state}
   end
@@ -200,15 +209,20 @@ defmodule DemoExWapp.WhatsApp do
   def handle_info({:ex_wapp_session, :connected}, state) do
     Logger.info("WhatsApp session connected", session_id: @session_id)
     mark_connected()
-    schedule_contact_refresh()
+    schedule_chat_refresh()
     {:noreply, cancel_qr_task(state)}
   end
 
   def handle_info({:ex_wapp_session, :connected, payload}, state) do
     status = payload_status(payload) || :connected
     SessionState.update(%{connection_status: status, qr_svg: nil, last_error: nil})
-    Logger.info("WhatsApp session state received", connection_status: status, payload: inspect(payload))
-    if status == :connected, do: schedule_contact_refresh()
+
+    Logger.info("WhatsApp session state received",
+      connection_status: status,
+      payload: inspect(payload)
+    )
+
+    if status == :connected, do: schedule_chat_refresh()
     {:noreply, if(status == :connected, do: cancel_qr_task(state), else: state)}
   end
 
@@ -222,7 +236,7 @@ defmodule DemoExWapp.WhatsApp do
     status = payload_status(payload) || :connected
     SessionState.update(%{connection_status: status, qr_svg: nil, last_error: nil})
     Logger.info("WhatsApp authentication ready", connection_status: status)
-    if status == :connected, do: schedule_contact_refresh()
+    if status == :connected, do: schedule_chat_refresh()
     {:noreply, cancel_qr_task(state)}
   end
 
@@ -235,26 +249,29 @@ defmodule DemoExWapp.WhatsApp do
   def handle_info({:ex_wapp_session, :initial_sync, :completed, _payload}, state) do
     Logger.info("WhatsApp initial sync completed")
     mark_connected()
-    schedule_contact_refresh()
+    schedule_chat_refresh()
     {:noreply, cancel_qr_task(state)}
   end
 
   def handle_info({:ex_wapp_session, :initial_sync, :failed, reason, _payload}, state) do
     Logger.warning("WhatsApp initial sync failed", reason: inspect(reason))
+
     SessionState.update(%{
       connection_status: :connected,
       qr_svg: nil,
       last_error: "Connected with initial sync warning: #{inspect(reason)}"
     })
 
+    schedule_chat_refresh()
     {:noreply, cancel_qr_task(state)}
   end
 
   def handle_info({:ex_wapp_session, :reconnecting, reason}, state) do
     Logger.warning("WhatsApp reconnecting", reason: inspect(reason))
+
     SessionState.update(%{
       connection_status: :reconnecting,
-      last_error: "Reconnecting: #{inspect(reason)}"
+      last_error: transient_disconnect_message(reason)
     })
 
     {:noreply, state}
@@ -262,18 +279,29 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_info({:ex_wapp_session, :disconnected, reason}, state) do
     Logger.warning("WhatsApp disconnected", reason: inspect(reason))
-    SessionState.update(%{connection_status: :disconnected, last_error: inspect(reason)})
+
+    SessionState.update(%{
+      connection_status: :disconnected,
+      last_error: transient_disconnect_message(reason)
+    })
+
     {:noreply, state}
   end
 
   def handle_info({:ex_wapp_session, :disconnected, reason, _payload}, state) do
     Logger.warning("WhatsApp disconnected", reason: inspect(reason))
-    SessionState.update(%{connection_status: :disconnected, last_error: inspect(reason)})
+
+    SessionState.update(%{
+      connection_status: :disconnected,
+      last_error: transient_disconnect_message(reason)
+    })
+
     {:noreply, state}
   end
 
   def handle_info({:ex_wapp_session, :error, reason}, state) do
     Logger.error("WhatsApp session error", reason: inspect(reason))
+
     if reset_required?(reason) do
       reset_rejected_session(reason)
       {:noreply, %{cancel_qr_task(state) | session: nil}}
@@ -389,9 +417,21 @@ defmodule DemoExWapp.WhatsApp do
   end
 
   defp handle_qr_event({:error, reason}) do
-    Logger.error("WhatsApp QR stream failed", reason: inspect(reason))
-    unless SessionState.snapshot().connection_status in [:connected, :syncing, :handshaking] do
-      SessionState.update(%{connection_status: :error, last_error: inspect(reason)})
+    if transient_stream_reason?(reason) do
+      Logger.warning("WhatsApp QR stream ended during recoverable reconnect",
+        reason: inspect(reason)
+      )
+    else
+      Logger.error("WhatsApp QR stream failed", reason: inspect(reason))
+
+      unless SessionState.snapshot().connection_status in [
+               :connected,
+               :syncing,
+               :handshaking,
+               :reconnecting
+             ] do
+        SessionState.update(%{connection_status: :error, last_error: inspect(reason)})
+      end
     end
   end
 
@@ -428,6 +468,23 @@ defmodule DemoExWapp.WhatsApp do
   defp reset_required?({:stream_error, "401", "device_removed"}), do: true
   defp reset_required?({:connection_failure, :unauthorized, _location}), do: true
   defp reset_required?(_reason), do: false
+
+  @spec transient_disconnect_message(term()) :: String.t() | nil
+  defp transient_disconnect_message(reason) do
+    if transient_stream_reason?(reason) do
+      nil
+    else
+      inspect(reason)
+    end
+  end
+
+  @spec transient_stream_reason?(term()) :: boolean()
+  defp transient_stream_reason?({:stream_error, code, _detail}) when code in ["503", "515"],
+    do: true
+
+  defp transient_stream_reason?({_, nested}), do: transient_stream_reason?(nested)
+  defp transient_stream_reason?({_, nested, _}), do: transient_stream_reason?(nested)
+  defp transient_stream_reason?(_reason), do: false
 
   @spec reset_rejected_session(term()) :: :ok
   defp reset_rejected_session(reason) do
@@ -476,58 +533,90 @@ defmodule DemoExWapp.WhatsApp do
   @spec qr_svg(String.t()) :: binary() | nil
   defp qr_svg(code) do
     with matrix <- QRCode.create(code, :high),
-         {:ok, svg} <- QRCode.render(matrix, :svg) do
-      svg
+         {:ok, svg} <- QRCode.render(matrix, :svg, @qr_svg_settings) do
+      put_svg_viewbox(svg)
     else
       _error -> nil
     end
   end
 
-  @spec schedule_contact_refresh() :: :ok
-  defp schedule_contact_refresh do
+  @spec put_svg_viewbox(binary()) :: binary()
+  defp put_svg_viewbox(svg) do
+    case Regex.run(~r/<svg width="(?<size>\d+)" height="\k<size>"/, svg, capture: :all_names) do
+      [size] ->
+        String.replace(
+          svg,
+          ~s(<svg width="#{size}" height="#{size}"),
+          ~s(<svg viewBox="0 0 #{size} #{size}" width="#{size}" height="#{size}" preserveAspectRatio="xMidYMid meet"),
+          global: false
+        )
+
+      _other ->
+        svg
+    end
+  end
+
+  @spec schedule_chat_refresh() :: :ok
+  defp schedule_chat_refresh do
     {:ok, _task} =
       Task.Supervisor.start_child(DemoExWapp.TaskSupervisor, fn ->
-        case refresh_contacts() do
-          :ok -> :ok
-          {:error, reason} -> Logger.warning("Background contact refresh failed", reason: inspect(reason))
+        case refresh_chats() do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Background chat refresh failed", reason: inspect(reason))
         end
       end)
 
     :ok
   end
 
-  @spec normalize_contacts(term()) :: {:ok, [map()]} | {:error, term()}
-  defp normalize_contacts({:ok, contacts}), do: normalize_contacts(contacts)
+  @spec normalize_chats(term()) :: {:ok, [map()]} | {:error, term()}
+  defp normalize_chats({:ok, chats}), do: normalize_chats(chats)
 
-  defp normalize_contacts(contacts) when is_list(contacts) do
+  defp normalize_chats(chats) when is_list(chats) do
     normalized =
-      contacts
-      |> Enum.map(&normalize_contact/1)
+      chats
+      |> Enum.map(&normalize_chat/1)
       |> Enum.reject(&(&1.jid == ""))
       |> Enum.uniq_by(& &1.jid)
-      |> Enum.sort_by(&String.downcase(&1.label))
+      |> Enum.sort_by(& &1.last_message_timestamp, :desc)
 
     {:ok, normalized}
   end
 
-  defp normalize_contacts({:error, reason}), do: {:error, reason}
-  defp normalize_contacts(other), do: {:error, {:unexpected_contacts_result, other}}
+  defp normalize_chats({:error, reason}), do: {:error, reason}
+  defp normalize_chats(other), do: {:error, {:unexpected_chats_result, other}}
 
-  @spec normalize_contact(ExWapp.Contact.t()) :: map()
-  defp normalize_contact(%ExWapp.Contact{} = contact) do
-    jid = normalize_jid(contact.jid)
+  @spec normalize_chat(ExWapp.Chat.chat()) :: map()
+  defp normalize_chat(%ExWapp.Chat{} = chat) do
+    jid = normalize_jid(chat.jid)
 
     %{
       jid: jid,
-      label: contact_label(contact, jid),
-      phone_number: contact.phone_number
+      label: chat_label(chat, jid),
+      unread_count: chat.unread_count || 0,
+      is_group?: chat.is_group || false,
+      last_message_timestamp: chat.last_message_timestamp || 0
     }
   end
 
-  @spec contact_label(ExWapp.Contact.t(), String.t()) :: String.t()
-  defp contact_label(%ExWapp.Contact{} = contact, jid) do
-    [contact.full_name, contact.push_name, contact.first_name, contact.username, contact.phone_number]
-    |> Enum.find_value(jid, &present_string/1)
+  defp normalize_chat(other) do
+    jid = other |> Map.get(:jid) |> normalize_jid()
+
+    %{
+      jid: jid,
+      label: other |> Map.get(:name) |> present_string() || jid,
+      unread_count: Map.get(other, :unread_count, 0),
+      is_group?: Map.get(other, :is_group, false),
+      last_message_timestamp: Map.get(other, :last_message_timestamp, 0) || 0
+    }
+  end
+
+  @spec chat_label(ExWapp.Chat.chat(), String.t()) :: String.t()
+  defp chat_label(%ExWapp.Chat{} = chat, jid) do
+    present_string(chat.name) || jid
   end
 
   @spec present_string(term()) :: String.t() | nil

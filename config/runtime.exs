@@ -15,8 +15,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 config :demo_ex_wapp,
-  ex_wapp_store_path:
-    System.get_env("EX_WAPP_STORE_PATH", Path.expand("var/ex_wapp/default.etf"))
+  ex_wapp_store_path: System.get_env("EX_WAPP_STORE_PATH", Path.expand("var/ex_wapp/default.etf"))
 
 config :demo_ex_wapp, DemoExWappWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]

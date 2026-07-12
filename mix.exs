@@ -15,6 +15,10 @@ defmodule DemoExWapp.MixProject do
     ]
   end
 
+  def cli do
+    [preferred_envs: [precommit: :test]]
+  end
+
   def application do
     [
       mod: {DemoExWapp.Application, []},
@@ -63,7 +67,8 @@ defmodule DemoExWapp.MixProject do
         "tailwind demo_ex_wapp --minify",
         "esbuild demo_ex_wapp --minify",
         "phx.digest"
-      ]
+      ],
+      precommit: ["compile --warnings-as-errors", "format", "test"]
     ]
   end
 end

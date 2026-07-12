@@ -9,7 +9,28 @@ config :ex_wapp, :runtime,
     connect_timeout_ms: 15_000,
     recv_timeout_ms: :infinity
   ],
-  signal: [session_max_age_ms: :timer.hours(3)]
+  signal: [
+    session_max_age_ms: :timer.hours(3)
+  ],
+  app_state: [
+    initial_sync_enabled: false
+  ],
+  protocol: [
+    client_version: "2.3000.1041871181",
+    pairing_device_props: [
+      os: "Mac OS",
+      platform_type: 1,
+      require_full_sync: false
+    ],
+    user_agent: [
+      os_version: "0.1",
+      manufacturer: "",
+      device_name: "Desktop",
+      os_build: "0.1",
+      locale_language: "en",
+      locale_country: "US"
+    ]
+  ]
 
 config :demo_ex_wapp, DemoExWappWeb.Endpoint,
   url: [host: "localhost"],

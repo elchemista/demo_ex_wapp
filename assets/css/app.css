@@ -44,8 +44,8 @@ button, input, select { font: inherit; }
 .button.danger { color: #ffc6c6; border-color: #673b3b; background: #301616; }
 .button.wide { width: 100%; margin-top: 18px; padding: 14px; }
 .qr-wrap { grid-column: 1 / -1; text-align: center; border-top: 1px solid var(--border); padding-top: 22px; }
-.qr { width: min(330px, 100%); margin: 0 auto 12px; padding: 14px; background: white; border-radius: 16px; }
-.qr svg { display: block; width: 100%; height: auto; }
+.qr { width: min(360px, 100%); margin: 0 auto 12px; padding: 18px; background: white; border-radius: 16px; overflow: hidden; }
+.qr svg { display: block; width: 100%; height: auto; aspect-ratio: 1 / 1; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .target-form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: .85rem; font-weight: 700; }

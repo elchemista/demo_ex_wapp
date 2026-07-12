@@ -32,6 +32,7 @@ defmodule DemoExWappWeb do
 
   defp html_helpers do
     quote do
+      import Phoenix.Controller, only: [get_csrf_token: 0]
       import Phoenix.HTML
       import Phoenix.Component
       import DemoExWappWeb.CoreComponents
