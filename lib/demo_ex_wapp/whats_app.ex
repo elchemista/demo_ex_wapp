@@ -701,6 +701,7 @@ defmodule DemoExWapp.WhatsApp do
     %{
       jid: target_jid,
       chat_jid: chat_jid,
+      aliases: chat_aliases(chat_jid, target_jid, contact),
       label: chat_label(chat, contact, chat_jid),
       phone_number: contact_phone(contact, target_jid),
       unread_count: chat.unread_count || 0,
@@ -718,6 +719,7 @@ defmodule DemoExWapp.WhatsApp do
     %{
       jid: target_jid,
       chat_jid: chat_jid,
+      aliases: chat_aliases(chat_jid, target_jid, contact),
       label: other |> Map.get(:name) |> present_string() || contact_label(contact) || chat_jid,
       phone_number: contact_phone(contact, target_jid),
       unread_count: Map.get(other, :unread_count, 0),
@@ -733,6 +735,18 @@ defmodule DemoExWapp.WhatsApp do
     do: present_string(contact.jid) || chat_jid
 
   defp target_jid(chat_jid, nil, false), do: chat_jid
+
+  @spec chat_aliases(String.t(), String.t(), ExWapp.Contact.t() | nil) :: [String.t()]
+  defp chat_aliases(chat_jid, target_jid, contact) do
+    contact_aliases =
+      case contact do
+        %ExWapp.Contact{} -> [normalize_jid(contact.jid), normalize_lid(contact.lid)]
+        nil -> []
+      end
+
+    [chat_jid, target_jid | contact_aliases]
+    |> normalize_jid_aliases()
+  end
 
   @spec chat_label(ExWapp.Chat.chat(), ExWapp.Contact.t() | nil, String.t()) :: String.t()
   defp chat_label(%ExWapp.Chat{} = chat, contact, chat_jid) do
@@ -800,15 +814,15 @@ defmodule DemoExWapp.WhatsApp do
   defp verify_inbound_message(jid, message) do
     snapshot = SessionState.snapshot()
     selected_jid = snapshot.selected_jid
-    source_jid = normalize_jid(jid)
-    aliases = active_chat_aliases(snapshot.chats, selected_jid)
+    source_aliases = inbound_chat_aliases(jid, message)
+    target_aliases = active_chat_aliases(snapshot.chats, selected_jid)
 
-    if selected_jid not in [nil, ""] and source_jid in aliases do
+    if selected_jid not in [nil, ""] and aliases_intersect?(source_aliases, target_aliases) do
       verify_selected_message(message)
     else
       Logger.debug("Inbound message does not match the active test target",
-        source_jid: source_jid,
-        target_jid: selected_jid
+        source_jids: inspect(source_aliases),
+        target_jids: inspect(target_aliases)
       )
     end
   end
@@ -817,10 +831,48 @@ defmodule DemoExWapp.WhatsApp do
   defp active_chat_aliases(chats, selected_jid) do
     case Enum.find(chats, &(&1.jid == selected_jid)) do
       nil -> [selected_jid]
-      chat -> [chat.jid, Map.get(chat, :chat_jid)]
+      chat -> [chat.jid, Map.get(chat, :chat_jid) | Map.get(chat, :aliases, [])]
     end
-    |> Enum.filter(&is_binary/1)
+    |> normalize_jid_aliases()
+  end
+
+  @spec inbound_chat_aliases(term(), map()) :: [String.t()]
+  defp inbound_chat_aliases(jid, message) do
+    source_jid = normalize_jid_alias(jid)
+
+    if String.ends_with?(source_jid, "@g.us") do
+      [source_jid]
+    else
+      attrs = get_in(message, [:raw, :attrs]) || %{}
+
+      [
+        source_jid,
+        Map.get(attrs, "sender_pn"),
+        Map.get(attrs, "sender_lid")
+      ]
+      |> normalize_jid_aliases()
+    end
+  end
+
+  @spec aliases_intersect?([String.t()], [String.t()]) :: boolean()
+  defp aliases_intersect?(source_aliases, target_aliases) do
+    target_aliases = MapSet.new(target_aliases)
+    Enum.any?(source_aliases, &MapSet.member?(target_aliases, &1))
+  end
+
+  @spec normalize_jid_aliases([term()]) :: [String.t()]
+  defp normalize_jid_aliases(aliases) do
+    aliases
+    |> Enum.map(&normalize_jid_alias/1)
+    |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
+  end
+
+  @spec normalize_jid_alias(term()) :: String.t()
+  defp normalize_jid_alias(jid) do
+    jid
+    |> normalize_jid()
+    |> String.replace(~r/:(\d+)@/, "@")
   end
 
   @spec verify_selected_message(map()) :: :ok
