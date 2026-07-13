@@ -900,7 +900,7 @@ defmodule DemoExWapp.WhatsApp do
   end
 
   @spec maybe_download_inbound_media(term()) :: :ok
-  defp maybe_download_inbound_media(%{ref: %ExWapp.Media.Ref{} = ref}) do
+  defp maybe_download_inbound_media(%ExWapp.Media.Ref{} = ref) do
     Logger.info("Scheduling inbound media download", media_type: ref.type, mimetype: ref.mimetype)
 
     {:ok, _task} =
@@ -908,6 +908,9 @@ defmodule DemoExWapp.WhatsApp do
 
     :ok
   end
+
+  defp maybe_download_inbound_media(%{ref: %ExWapp.Media.Ref{} = ref}),
+    do: maybe_download_inbound_media(ref)
 
   defp maybe_download_inbound_media(_media), do: :ok
 
