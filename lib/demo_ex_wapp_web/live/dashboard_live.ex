@@ -94,6 +94,7 @@ defmodule DemoExWappWeb.DashboardLive do
        )}
     else
       Logger.info("Run suite clicked", target_jid: jid)
+
       {:noreply,
        execute(socket, "Automatic test suite started", fn -> WhatsApp.run_suite(jid) end)}
     end
@@ -132,7 +133,7 @@ defmodule DemoExWappWeb.DashboardLive do
             <p class="eyebrow">EXWAPP FEATURE HARNESS</p>
             <h1>WhatsApp integration test</h1>
             <p>
-              Pair one device, verify data and history APIs, then send every structured message.
+              Pair one device, send structured fixtures, then verify local history APIs.
             </p>
           </div>
           <div class={"status status-#{@state.connection_status}"}>

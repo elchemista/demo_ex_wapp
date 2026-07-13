@@ -9,7 +9,7 @@ defmodule DemoExWapp.TestSuite do
 
   require Logger
 
-  alias DemoExWapp.{SessionState, WhatsApp}
+  alias DemoExWapp.{SessionState, TestSuite.HistoryVerification, WhatsApp}
 
   @type operation :: {atom(), (-> term())}
   @type operation_result :: :passed | {:failed, term()}
@@ -21,8 +21,9 @@ defmodule DemoExWapp.TestSuite do
     Logger.info("Automatic ExWapp test suite started", target_jid: jid)
     :ok = SessionState.reset_tests(jid)
 
-    Enum.each(data_operations(jid), &run_operation(&1, jid))
+    Enum.each(metadata_operations(), &run_operation(&1, jid))
     run_send_operations(send_operations(jid), jid)
+    Enum.each(history_operations(jid), &run_operation(&1, jid))
 
     Logger.info("Automatic ExWapp test suite finished", target_jid: jid)
   end
@@ -42,12 +43,18 @@ defmodule DemoExWapp.TestSuite do
     end
   end
 
-  @spec data_operations(String.t()) :: [operation()]
-  defp data_operations(jid) do
+  @spec metadata_operations() :: [operation()]
+  defp metadata_operations do
     [
       {:sync_contacts, &verify_contact_sync/0},
       {:list_contacts, &verify_contacts/0},
-      {:list_chats, &verify_chats/0},
+      {:list_chats, &verify_chats/0}
+    ]
+  end
+
+  @spec history_operations(String.t()) :: [operation()]
+  defp history_operations(jid) do
+    [
       {:get_messages, fn -> verify_message_page(jid) end},
       {:stream_messages, fn -> verify_message_stream(jid) end},
       {:all_messages, fn -> verify_all_messages_stream(jid) end}
@@ -231,21 +238,23 @@ defmodule DemoExWapp.TestSuite do
 
   @spec verify_message_page(String.t()) :: verification_result()
   defp verify_message_page(jid) do
-    verify_list(WhatsApp.get_messages(jid, limit: 20), "messages in bounded page")
+    jid
+    |> WhatsApp.get_messages(limit: 20)
+    |> HistoryVerification.message_page(jid)
   end
 
   @spec verify_message_stream(String.t()) :: verification_result()
   defp verify_message_stream(jid) do
     jid
     |> WhatsApp.stream_messages(order: :oldest_first)
-    |> verify_lazy_stream("stream_messages/3")
+    |> HistoryVerification.lazy_stream("stream_messages/3")
   end
 
   @spec verify_all_messages_stream(String.t()) :: verification_result()
   defp verify_all_messages_stream(jid) do
     jid
     |> WhatsApp.all_messages(order: :oldest_first)
-    |> verify_lazy_stream("all_messages/3")
+    |> HistoryVerification.lazy_stream("all_messages/3")
   end
 
   @spec verify_list({:ok, term()} | {:error, term()}, String.t()) :: verification_result()
@@ -255,18 +264,6 @@ defmodule DemoExWapp.TestSuite do
 
   defp verify_list({:ok, other}, label), do: {:error, {:unexpected_list, label, other}}
   defp verify_list({:error, _reason} = error, _label), do: error
-
-  @spec verify_lazy_stream({:ok, term()} | {:error, term()}, String.t()) ::
-          verification_result()
-  defp verify_lazy_stream({:ok, %Stream{} = stream}, api_name) do
-    sampled = stream |> Enum.take(1) |> length()
-    {:verified, "#{api_name} is lazy; sampled #{sampled} item(s), at most one"}
-  end
-
-  defp verify_lazy_stream({:ok, other}, api_name),
-    do: {:error, {:expected_lazy_stream, api_name, other}}
-
-  defp verify_lazy_stream({:error, _reason} = error, _api_name), do: error
 
   @spec block_operations([operation()], String.t(), term()) :: :ok
   defp block_operations(operations, jid, reason) do

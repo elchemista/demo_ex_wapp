@@ -40,7 +40,7 @@ ExWapp elsewhere, for example `EX_WAPP_PATH=../ex_wapp mix setup`.
 1. Click **Start test** and scan the QR from WhatsApp → Settings → Linked devices.
 2. Wait for the status to become `connected` and refresh contacts if the selector is still empty.
 3. Select a contact, or enter a complete JID such as `393331234567@s.whatsapp.net`.
-4. Run the automatic suite. It first checks contact synchronization, contact and chat lists, a bounded message page, and both lazy history stream APIs. It then attempts text, image, Opus voice note, document, GPS location, vCard contact, and the optional calendar event independently.
+4. Run the automatic suite. It first checks contact synchronization and contact/chat metadata. It then attempts text, image, Opus voice note, document, GPS location, vCard contact, and the optional calendar event independently. Finally, it checks a bounded message page and both lazy history stream APIs against the locally retained messages for that chat.
 5. From WhatsApp, reply to the same chat with text, image, audio, document, location, contact, and optionally an event. Each decoded reply updates its checklist item.
 
 The calendar event is intentionally marked optional because the WhatsApp Web message is less stable than the other message types.
@@ -51,8 +51,12 @@ The data checklist calls ExWapp directly through the demo wrapper:
 
 - `sync_contacts/1` refreshes the contact collection.
 - `list_contacts/1` and `list_chats/1` verify the stored directory and chat metadata.
-- `get_messages/3` reads at most 20 locally retained messages for the selected chat.
-- `stream_messages/3` and `all_messages/3` must return lazy `%Stream{}` values. The harness uses `Enum.take(stream, 1)`, so it never materializes the complete history just to mark the test green.
+- `get_messages/3` reads at most 20 locally retained messages for the selected chat and fails if the page is empty.
+- `stream_messages/3` and `all_messages/3` must return lazy `%Stream{}` values and yield at least one local message. The harness uses `Enum.take(stream, 1)`, so it never materializes the complete history just to mark the test green.
+
+The history checks run after the outbound send attempts so a fresh test target
+has locally retained messages to sample. If the selected chat still has no
+local messages, the history checks fail instead of reporting a false pass.
 
 The chat check also fails if a chat struct embeds a `:messages` field. Message
 payloads belong to ExWapp's dedicated message store and are pulled through the
