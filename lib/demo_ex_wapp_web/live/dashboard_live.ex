@@ -7,6 +7,15 @@ defmodule DemoExWappWeb.DashboardLive do
 
   alias DemoExWapp.{SessionState, WhatsApp}
 
+  @data_tests [
+    {:sync_contacts, "Synchronize contacts"},
+    {:list_contacts, "List synced contacts"},
+    {:list_chats, "List chat metadata"},
+    {:get_messages, "Read a bounded message page"},
+    {:stream_messages, "Stream chat history lazily"},
+    {:all_messages, "Stream all local messages without a limit"}
+  ]
+
   @send_tests [
     {:send_text, "Send text"},
     {:send_image, "Send image"},
@@ -85,7 +94,6 @@ defmodule DemoExWappWeb.DashboardLive do
        )}
     else
       Logger.info("Run suite clicked", target_jid: jid)
-
       {:noreply,
        execute(socket, "Automatic test suite started", fn -> WhatsApp.run_suite(jid) end)}
     end
@@ -109,7 +117,12 @@ defmodule DemoExWappWeb.DashboardLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, send_tests: @send_tests, receive_tests: @receive_tests)
+    assigns =
+      assign(assigns,
+        data_tests: @data_tests,
+        send_tests: @send_tests,
+        receive_tests: @receive_tests
+      )
 
     ~H"""
     <Layouts.app flash={@flash}>
@@ -119,7 +132,7 @@ defmodule DemoExWappWeb.DashboardLive do
             <p class="eyebrow">EXWAPP FEATURE HARNESS</p>
             <h1>WhatsApp integration test</h1>
             <p>
-              Pair one device, choose a chat, then send and verify every new structured message.
+              Pair one device, verify data and history APIs, then send every structured message.
             </p>
           </div>
           <div class={"status status-#{@state.connection_status}"}>
@@ -238,11 +251,17 @@ defmodule DemoExWappWeb.DashboardLive do
                 empty?(@selected_jid) or lid_jid?(@selected_jid)
             }
           >
-            Run automatic media, GPS, contact and event suite
+            Run data, history, media, GPS, contact and event suite
           </button>
         </section>
 
         <section class="check-grid">
+          <.checklist
+            title="Data and local history APIs"
+            subtitle="Contacts, chat metadata, bounded pages, and lazy streams"
+            tests={@data_tests}
+            results={@state.tests}
+          />
           <.checklist
             title="Automatic sends"
             subtitle="Marked as soon as ExWapp returns a result"

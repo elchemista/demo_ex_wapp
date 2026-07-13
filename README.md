@@ -1,6 +1,6 @@
 # demo_ex_wapp
 
-A one-page Phoenix LiveView harness for manually exercising the structured-message APIs on ExWapp's `feat/media-location-contacts` branch.
+A one-page Phoenix LiveView harness for manually exercising the data, local-history, and structured-message APIs on ExWapp's `agent/refactor-message-boundaries` branch.
 
 It connects a WhatsApp linked device with a QR code, loads contacts, sends an automatic feature suite, and marks inbound checks when you reply from WhatsApp. Received images, audio, and documents are downloaded and decrypted automatically. Image previews, an audio player, and document links remain available in memory for ten minutes.
 
@@ -9,11 +9,12 @@ It connects a WhatsApp linked device with a QR code, loads contacts, sends an au
 The ExWapp repository is deliberately vendored only in your local checkout. The complete `vendor/` directory is ignored by Git and is never included in this repository.
 
 ```bash
-git clone https://github.com/elchemista/demo_ex_wapp.git
+git clone --branch agent/liveview-feature-harness \
+  https://github.com/elchemista/demo_ex_wapp.git
 cd demo_ex_wapp
 
 mkdir -p vendor
-git clone --branch feat/media-location-contacts \
+git clone --branch agent/refactor-message-boundaries \
   git@github.com:elchemista/ex_wapp.git \
   vendor/ex_wapp
 
@@ -27,19 +28,36 @@ If you already cloned ExWapp on another branch:
 
 ```bash
 git -C vendor/ex_wapp fetch origin
-git -C vendor/ex_wapp switch feat/media-location-contacts
-git -C vendor/ex_wapp pull --rebase origin feat/media-location-contacts
+git -C vendor/ex_wapp switch agent/refactor-message-boundaries
+git -C vendor/ex_wapp pull --rebase origin agent/refactor-message-boundaries
 ```
+
+`vendor/ex_wapp` is the default dependency path. Set `EX_WAPP_PATH` if you keep
+ExWapp elsewhere, for example `EX_WAPP_PATH=../ex_wapp mix setup`.
 
 ## Test flow
 
 1. Click **Start test** and scan the QR from WhatsApp → Settings → Linked devices.
 2. Wait for the status to become `connected` and refresh contacts if the selector is still empty.
 3. Select a contact, or enter a complete JID such as `393331234567@s.whatsapp.net`.
-4. Run the automatic suite. It attempts text, image, Opus voice note, document, GPS location, vCard contact, and the optional calendar event independently.
+4. Run the automatic suite. It first checks contact synchronization, contact and chat lists, a bounded message page, and both lazy history stream APIs. It then attempts text, image, Opus voice note, document, GPS location, vCard contact, and the optional calendar event independently.
 5. From WhatsApp, reply to the same chat with text, image, audio, document, location, contact, and optionally an event. Each decoded reply updates its checklist item.
 
 The calendar event is intentionally marked optional because the WhatsApp Web message is less stable than the other message types.
+
+## Data and chat-history checks
+
+The data checklist calls ExWapp directly through the demo wrapper:
+
+- `sync_contacts/1` refreshes the contact collection.
+- `list_contacts/1` and `list_chats/1` verify the stored directory and chat metadata.
+- `get_messages/3` reads at most 20 locally retained messages for the selected chat.
+- `stream_messages/3` and `all_messages/3` must return lazy `%Stream{}` values. The harness uses `Enum.take(stream, 1)`, so it never materializes the complete history just to mark the test green.
+
+The chat check also fails if a chat struct embeds a `:messages` field. Message
+payloads belong to ExWapp's dedicated message store and are pulled through the
+page or stream APIs. These APIs expose local retained history; they do not ask
+WhatsApp to export older server-side history on demand.
 
 ## Logs and error reports
 
@@ -78,6 +96,7 @@ Do not publish QR payloads, pairing-store files, raw media keys, or full logs co
 ```bash
 mix format --check-formatted
 mix compile --warnings-as-errors
+mix test
 ```
 
 This repository intentionally does not duplicate ExWapp's library test suite. Its purpose is an interactive end-to-end check against a real linked device.

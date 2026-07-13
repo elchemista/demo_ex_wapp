@@ -1,9 +1,10 @@
 defmodule DemoExWapp.TestSuite do
   @moduledoc """
-  Runs the outbound ExWapp smoke suite against one selected WhatsApp contact.
+  Runs ExWapp data, history, and outbound smoke checks against one selected chat.
 
-  Every operation is independent: a failed optional event does not prevent the
-  remaining checks from running, and every result is written to `SessionState`.
+  Data checks are independent from message sending. A failed optional event does
+  not prevent the remaining checks from running, and every result is written to
+  `SessionState`.
   """
 
   require Logger
@@ -12,15 +13,22 @@ defmodule DemoExWapp.TestSuite do
 
   @type operation :: {atom(), (-> term())}
   @type operation_result :: :passed | {:failed, term()}
+  @type verification_result :: {:verified, String.t()} | {:error, term()}
 
-  @doc "Runs every outbound feature check for the selected contact."
+  @doc "Runs every data, history, and outbound feature check for the selected chat."
   @spec run(String.t()) :: :ok
   def run(jid) when is_binary(jid) do
     Logger.info("Automatic ExWapp test suite started", target_jid: jid)
     :ok = SessionState.reset_tests(jid)
 
-    [preflight | remaining] = operations(jid)
+    Enum.each(data_operations(jid), &run_operation(&1, jid))
+    run_send_operations(send_operations(jid), jid)
 
+    Logger.info("Automatic ExWapp test suite finished", target_jid: jid)
+  end
+
+  @spec run_send_operations([operation()], String.t()) :: :ok
+  defp run_send_operations([preflight | remaining], jid) do
     case run_operation(preflight, jid) do
       {:failed, reason} when is_binary(jid) ->
         if shared_preflight_failed?(reason) do
@@ -32,12 +40,22 @@ defmodule DemoExWapp.TestSuite do
       :passed ->
         Enum.each(remaining, &run_operation(&1, jid))
     end
-
-    Logger.info("Automatic ExWapp test suite finished", target_jid: jid)
   end
 
-  @spec operations(String.t()) :: [operation()]
-  defp operations(jid) do
+  @spec data_operations(String.t()) :: [operation()]
+  defp data_operations(jid) do
+    [
+      {:sync_contacts, &verify_contact_sync/0},
+      {:list_contacts, &verify_contacts/0},
+      {:list_chats, &verify_chats/0},
+      {:get_messages, fn -> verify_message_page(jid) end},
+      {:stream_messages, fn -> verify_message_stream(jid) end},
+      {:all_messages, fn -> verify_all_messages_stream(jid) end}
+    ]
+  end
+
+  @spec send_operations(String.t()) :: [operation()]
+  defp send_operations(jid) do
     event_start = DateTime.add(DateTime.utc_now(), 3_600, :second)
 
     [
@@ -123,12 +141,17 @@ defmodule DemoExWapp.TestSuite do
   end
 
   @spec record_result(term(), atom(), String.t()) :: operation_result()
+  defp record_result({:verified, detail}, test, jid) do
+    :ok = pass(test, jid, detail)
+    :passed
+  end
+
   defp record_result(:ok, test, jid) do
     :ok = pass(test, jid, "ok")
     :passed
   end
 
-  defp record_result({:ok, id}, test, jid) do
+  defp record_result({:ok, id}, test, jid) when is_binary(id) do
     case WhatsApp.await_message_ack(jid, id) do
       {:ok, status} ->
         :ok = pass(test, jid, "message_id=#{id} server_ack=#{status}")
@@ -167,6 +190,83 @@ defmodule DemoExWapp.TestSuite do
     :ok = SessionState.mark_test(test, :failed, detail)
     {:failed, other}
   end
+
+  @spec verify_contact_sync() :: verification_result()
+  defp verify_contact_sync do
+    case WhatsApp.sync_contacts() do
+      :ok -> {:verified, "Contact synchronization completed"}
+      {:ok, _value} -> {:verified, "Contact synchronization completed"}
+      {:error, _reason} = error -> error
+      other -> {:error, {:unexpected_contact_sync_result, other}}
+    end
+  end
+
+  @spec verify_contacts() :: verification_result()
+  defp verify_contacts do
+    verify_list(WhatsApp.list_contacts(), "contacts")
+  end
+
+  @spec verify_chats() :: verification_result()
+  defp verify_chats do
+    case WhatsApp.list_chats() do
+      {:ok, chats} when is_list(chats) -> verify_chat_metadata(chats)
+      {:ok, other} -> {:error, {:unexpected_chat_list, other}}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @spec verify_chat_metadata([term()]) :: verification_result()
+  defp verify_chat_metadata(chats) do
+    metadata_only? =
+      Enum.all?(chats, fn chat ->
+        is_map(chat) and not Map.has_key?(chat, :messages)
+      end)
+
+    if metadata_only? do
+      {:verified, "#{length(chats)} chats; message history is stored separately"}
+    else
+      {:error, :chat_list_contains_embedded_message_history}
+    end
+  end
+
+  @spec verify_message_page(String.t()) :: verification_result()
+  defp verify_message_page(jid) do
+    verify_list(WhatsApp.get_messages(jid, limit: 20), "messages in bounded page")
+  end
+
+  @spec verify_message_stream(String.t()) :: verification_result()
+  defp verify_message_stream(jid) do
+    jid
+    |> WhatsApp.stream_messages(order: :oldest_first)
+    |> verify_lazy_stream("stream_messages/3")
+  end
+
+  @spec verify_all_messages_stream(String.t()) :: verification_result()
+  defp verify_all_messages_stream(jid) do
+    jid
+    |> WhatsApp.all_messages(order: :oldest_first)
+    |> verify_lazy_stream("all_messages/3")
+  end
+
+  @spec verify_list({:ok, term()} | {:error, term()}, String.t()) :: verification_result()
+  defp verify_list({:ok, values}, label) when is_list(values) do
+    {:verified, "#{length(values)} #{label}"}
+  end
+
+  defp verify_list({:ok, other}, label), do: {:error, {:unexpected_list, label, other}}
+  defp verify_list({:error, _reason} = error, _label), do: error
+
+  @spec verify_lazy_stream({:ok, term()} | {:error, term()}, String.t()) ::
+          verification_result()
+  defp verify_lazy_stream({:ok, %Stream{} = stream}, api_name) do
+    sampled = stream |> Enum.take(1) |> length()
+    {:verified, "#{api_name} is lazy; sampled #{sampled} item(s), at most one"}
+  end
+
+  defp verify_lazy_stream({:ok, other}, api_name),
+    do: {:error, {:expected_lazy_stream, api_name, other}}
+
+  defp verify_lazy_stream({:error, _reason} = error, _api_name), do: error
 
   @spec block_operations([operation()], String.t(), term()) :: :ok
   defp block_operations(operations, jid, reason) do

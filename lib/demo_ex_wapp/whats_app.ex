@@ -3,8 +3,8 @@ defmodule DemoExWapp.WhatsApp do
   Owns the single ExWapp session used by the LiveView demo.
 
   The lifecycle and QR flow follow the production wrapper used by `isma`, while
-  message-specific functions expose every structured-message feature added on
-  the `feat/media-location-contacts` branch.
+  message-specific functions expose the structured-message and history APIs on
+  the `agent/refactor-message-boundaries` branch.
   """
 
   use GenServer
@@ -93,11 +93,46 @@ defmodule DemoExWapp.WhatsApp do
           {:ok, ExWapp.Media.Download.t()} | {:error, term()}
   def download_media(ref), do: with_session(&ExWapp.download_media(&1, ref, []))
 
+  @doc "Synchronizes the contact collection for the active ExWapp session."
+  @spec sync_contacts() :: :ok | {:error, term()}
+  def sync_contacts, do: with_session(&ExWapp.sync_contacts/1)
+
+  @doc "Returns all contacts currently available in the ExWapp store."
+  @spec list_contacts() :: {:ok, [ExWapp.Contact.t()]} | {:error, term()}
+  def list_contacts do
+    with_session(fn session -> session |> ExWapp.list_contacts() |> tag_value() end)
+  end
+
+  @doc "Returns chat metadata without materializing each chat's message history."
+  @spec list_chats() :: {:ok, [ExWapp.Chat.chat()]} | {:error, term()}
+  def list_chats do
+    with_session(fn session -> session |> ExWapp.list_chats() |> tag_value() end)
+  end
+
+  @doc "Returns one bounded, materialized page of locally retained chat messages."
+  @spec get_messages(String.t(), keyword()) ::
+          {:ok, [ExWapp.Chat.message()]} | {:error, term()}
+  def get_messages(jid, opts \\ []) when is_binary(jid) and is_list(opts) do
+    with_session(fn session -> session |> ExWapp.get_messages(jid, opts) |> tag_value() end)
+  end
+
+  @doc "Returns ExWapp's lazy stream over locally retained messages for one chat."
+  @spec stream_messages(String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
+  def stream_messages(jid, opts \\ []) when is_binary(jid) and is_list(opts) do
+    with_session(fn session -> session |> ExWapp.stream_messages(jid, opts) |> tag_value() end)
+  end
+
+  @doc "Returns the unbounded local-history stream for one chat."
+  @spec all_messages(String.t(), keyword()) :: {:ok, Enumerable.t()} | {:error, term()}
+  def all_messages(jid, opts \\ []) when is_binary(jid) and is_list(opts) do
+    with_session(fn session -> session |> ExWapp.all_messages(jid, opts) |> tag_value() end)
+  end
+
   @doc "Loads chats from the active ExWapp session into the LiveView state."
   @spec refresh_chats() :: :ok | {:error, term()}
   def refresh_chats, do: GenServer.call(__MODULE__, :refresh_chats, 70_000)
 
-  @doc "Starts the automatic outbound test suite in a supervised task."
+  @doc "Starts the automatic data, history, and outbound test suite in a supervised task."
   @spec run_suite(String.t()) :: :ok | {:error, term()}
   def run_suite(jid) when is_binary(jid) and jid != "" do
     GenServer.call(__MODULE__, {:run_suite, jid})
@@ -378,6 +413,13 @@ defmodule DemoExWapp.WhatsApp do
       :error -> {:error, :session_not_started}
     end
   end
+
+  @spec tag_value({:ok, result} | {:error, term()} | result) ::
+          {:ok, result} | {:error, term()}
+        when result: term()
+  defp tag_value({:ok, value}), do: {:ok, value}
+  defp tag_value({:error, _reason} = error), do: error
+  defp tag_value(value), do: {:ok, value}
 
   @spec poll_message_ack(pid(), String.t(), String.t(), integer()) ::
           {:ok, ExWapp.Chat.message_status()} | {:error, term()}

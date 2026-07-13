@@ -55,7 +55,7 @@ button, input, select { font: inherit; }
 .target-form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: .85rem; font-weight: 700; }
 input, select { width: 100%; color: #e9f7f0; background: #07130f; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
-.check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 22px; }
 .checklist > p { min-height: 42px; }
 .checklist ul { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 9px; }
 .check { display: flex; gap: 11px; align-items: flex-start; padding: 11px; border-radius: 10px; background: #07130f; border: 1px solid #173127; }

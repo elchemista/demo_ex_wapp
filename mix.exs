@@ -50,8 +50,12 @@ defmodule DemoExWapp.MixProject do
       {:jason, "~> 1.4"},
       {:qr_code, "~> 3.2"},
       {:bandit, "~> 1.7"},
-      {:ex_wapp, path: "../ex_wapp", branch: "feat/media-location-contacts", override: true}
+      {:ex_wapp, path: ex_wapp_path(), override: true}
     ]
+  end
+
+  defp ex_wapp_path do
+    System.get_env("EX_WAPP_PATH", "vendor/ex_wapp")
   end
 
   defp aliases do

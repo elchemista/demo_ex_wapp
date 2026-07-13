@@ -14,6 +14,15 @@ defmodule DemoExWapp.SessionState do
   @max_messages 100
   @max_health_events 30
 
+  @data_tests [
+    :sync_contacts,
+    :list_contacts,
+    :list_chats,
+    :get_messages,
+    :stream_messages,
+    :all_messages
+  ]
+
   @send_tests [
     :send_text,
     :send_image,
@@ -33,6 +42,8 @@ defmodule DemoExWapp.SessionState do
     :receive_contact,
     :receive_event
   ]
+
+  @automatic_tests @data_tests ++ @send_tests
 
   @type test_status :: :pending | :running | :passed | :failed | :blocked
   @type test_result :: %{
@@ -190,13 +201,13 @@ defmodule DemoExWapp.SessionState do
 
   @spec empty_tests() :: %{atom() => test_result()}
   defp empty_tests do
-    (@send_tests ++ @receive_tests)
+    (@automatic_tests ++ @receive_tests)
     |> Map.new(fn test -> {test, %{status: :pending, detail: nil, updated_at: nil}} end)
   end
 
   @spec suite_running?(map()) :: boolean()
   defp suite_running?(tests) do
-    Enum.any?(@send_tests, &(get_in(tests, [&1, :status]) in [:pending, :running]))
+    Enum.any?(@automatic_tests, &(get_in(tests, [&1, :status]) in [:pending, :running]))
   end
 
   @spec suite_finished_at(snapshot(), boolean()) :: DateTime.t() | nil
@@ -227,6 +238,10 @@ defmodule DemoExWapp.SessionState do
 
   @spec normalize_snapshot(snapshot()) :: snapshot()
   defp normalize_snapshot(state) do
-    Map.put_new(state, :chats, Map.get(state, :contacts, []))
+    tests = Map.merge(empty_tests(), Map.get(state, :tests, %{}))
+
+    state
+    |> Map.put_new(:chats, Map.get(state, :contacts, []))
+    |> Map.put(:tests, tests)
   end
 end
