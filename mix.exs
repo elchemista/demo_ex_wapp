@@ -50,7 +50,7 @@ defmodule DemoExWapp.MixProject do
       {:jason, "~> 1.4"},
       {:qr_code, "~> 3.2"},
       {:bandit, "~> 1.7"},
-      {:ex_wapp, path: "vendor/ex_wapp", override: true}
+      {:ex_wapp, path: "../ex_wapp", branch: "feat/media-location-contacts", override: true}
     ]
   end
 
