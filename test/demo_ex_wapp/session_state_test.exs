@@ -20,4 +20,11 @@ defmodule DemoExWapp.SessionStateTest do
       assert status in [:pending, :running, :passed, :failed, :blocked]
     end)
   end
+
+  test "snapshot exposes the QR image source instead of inline SVG" do
+    snapshot = SessionState.snapshot()
+
+    assert Map.has_key?(snapshot, :qr_image_src)
+    refute Map.has_key?(snapshot, :qr_svg)
+  end
 end

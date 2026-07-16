@@ -176,9 +176,11 @@ defmodule DemoExWappWeb.DashboardLive do
               Reset pairing
             </button>
           </div>
-          <%= if @state.qr_svg do %>
+          <%= if @state.qr_image_src do %>
             <div class="qr-wrap">
-              <div class="qr">{Phoenix.HTML.raw(@state.qr_svg)}</div>
+              <div class="qr">
+                <img src={@state.qr_image_src} alt="WhatsApp pairing QR code" />
+              </div>
               <p>WhatsApp → Settings → Linked devices → Link a device</p>
             </div>
           <% end %>

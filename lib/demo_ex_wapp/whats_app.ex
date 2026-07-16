@@ -11,13 +11,12 @@ defmodule DemoExWapp.WhatsApp do
 
   require Logger
 
-  alias DemoExWapp.{DownloadStore, SessionState, TestSuite}
+  alias DemoExWapp.{DownloadStore, QRImage, SessionState, TestSuite}
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
 
   @session_id "demo"
   @ack_poll_interval_ms 50
   @ack_timeout_ms 5_000
-  @qr_svg_settings %QRCode.Render.SvgSettings{flatten: true}
 
   @doc "Starts the WhatsApp wrapper."
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -182,7 +181,7 @@ defmodule DemoExWapp.WhatsApp do
       ExWapp.disconnect(session)
     end
 
-    SessionState.update(%{connection_status: :disconnected, qr_svg: nil})
+    SessionState.update(%{connection_status: :disconnected, qr_image_src: nil})
     {:reply, :ok, state |> cancel_qr_task() |> unsubscribe_session_events()}
   end
 
@@ -193,7 +192,7 @@ defmodule DemoExWapp.WhatsApp do
          :ok <- clear_store_files() do
       SessionState.update(%{
         connection_status: :idle,
-        qr_svg: nil,
+        qr_image_src: nil,
         last_error: nil
       })
 
@@ -265,7 +264,7 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_info({:ex_wapp_session, :connected, payload}, state) do
     status = payload_status(payload) || :connected
-    SessionState.update(%{connection_status: status, qr_svg: nil, last_error: nil})
+    SessionState.update(%{connection_status: status, qr_image_src: nil, last_error: nil})
 
     Logger.info("WhatsApp session state received",
       connection_status: status,
@@ -284,7 +283,7 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_info({:ex_wapp_session, :post_auth_ready, payload}, state) do
     status = payload_status(payload) || :connected
-    SessionState.update(%{connection_status: status, qr_svg: nil, last_error: nil})
+    SessionState.update(%{connection_status: status, qr_image_src: nil, last_error: nil})
     Logger.info("WhatsApp authentication ready", connection_status: status)
     if status == :connected, do: schedule_chat_refresh()
     {:noreply, cancel_qr_task(state)}
@@ -292,7 +291,7 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_info({:ex_wapp_session, :initial_sync, :started, _payload}, state) do
     Logger.info("WhatsApp initial sync started")
-    SessionState.update(%{connection_status: :syncing, qr_svg: nil})
+    SessionState.update(%{connection_status: :syncing, qr_image_src: nil})
     {:noreply, cancel_qr_task(state)}
   end
 
@@ -308,7 +307,7 @@ defmodule DemoExWapp.WhatsApp do
 
     SessionState.update(%{
       connection_status: :connected,
-      qr_svg: nil,
+      qr_image_src: nil,
       last_error: "Connected with initial sync warning: #{inspect(reason)}"
     })
 
@@ -498,7 +497,22 @@ defmodule DemoExWapp.WhatsApp do
   @spec handle_qr_event(ExWapp.Session.qr_event()) :: :ok
   defp handle_qr_event({:code, code}) do
     Logger.info("WhatsApp QR code generated", code_bytes: byte_size(code))
-    SessionState.update(%{connection_status: :pairing, qr_svg: qr_svg(code), last_error: nil})
+
+    qr_image_src =
+      case QRImage.data_uri(code) do
+        {:ok, data_uri} ->
+          data_uri
+
+        {:error, reason} ->
+          Logger.error("WhatsApp QR image rendering failed", reason: inspect(reason))
+          nil
+      end
+
+    SessionState.update(%{
+      connection_status: :pairing,
+      qr_image_src: qr_image_src,
+      last_error: nil
+    })
   end
 
   defp handle_qr_event(:success) do
@@ -527,7 +541,7 @@ defmodule DemoExWapp.WhatsApp do
 
   @spec mark_connected() :: :ok
   defp mark_connected,
-    do: SessionState.update(%{connection_status: :connected, qr_svg: nil, last_error: nil})
+    do: SessionState.update(%{connection_status: :connected, qr_image_src: nil, last_error: nil})
 
   @spec payload_status(term()) :: atom() | nil
   defp payload_status(%{status: status}), do: normalize_status(status)
@@ -583,7 +597,7 @@ defmodule DemoExWapp.WhatsApp do
 
     SessionState.update(%{
       connection_status: :error,
-      qr_svg: nil,
+      qr_image_src: nil,
       last_error: "Stored device was rejected (#{inspect(reason)}). Connect again for a fresh QR."
     })
   end
@@ -618,32 +632,6 @@ defmodule DemoExWapp.WhatsApp do
   @spec store_path() :: String.t()
   defp store_path do
     Application.fetch_env!(:demo_ex_wapp, :ex_wapp_store_path)
-  end
-
-  @spec qr_svg(String.t()) :: binary() | nil
-  defp qr_svg(code) do
-    with matrix <- QRCode.create(code, :high),
-         {:ok, svg} <- QRCode.render(matrix, :svg, @qr_svg_settings) do
-      put_svg_viewbox(svg)
-    else
-      _error -> nil
-    end
-  end
-
-  @spec put_svg_viewbox(binary()) :: binary()
-  defp put_svg_viewbox(svg) do
-    case Regex.run(~r/<svg width="(?<size>\d+)" height="\k<size>"/, svg, capture: :all_names) do
-      [size] ->
-        String.replace(
-          svg,
-          ~s(<svg width="#{size}" height="#{size}"),
-          ~s(<svg viewBox="0 0 #{size} #{size}" width="#{size}" height="#{size}" preserveAspectRatio="xMidYMid meet"),
-          global: false
-        )
-
-      _other ->
-        svg
-    end
   end
 
   @spec schedule_chat_refresh() :: :ok

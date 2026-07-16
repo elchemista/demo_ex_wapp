@@ -185,7 +185,7 @@ defmodule DemoExWapp.SessionState do
   defp default_snapshot do
     %{
       connection_status: :idle,
-      qr_svg: nil,
+      qr_image_src: nil,
       last_error: nil,
       chats: [],
       selected_jid: nil,
@@ -242,6 +242,8 @@ defmodule DemoExWapp.SessionState do
 
     state
     |> Map.put_new(:chats, Map.get(state, :contacts, []))
+    |> Map.put_new(:qr_image_src, nil)
+    |> Map.delete(:qr_svg)
     |> Map.put(:tests, tests)
   end
 end
