@@ -1,22 +1,20 @@
 # demo_ex_wapp
 
-A one-page Phoenix LiveView harness for manually exercising the data, local-history, and structured-message APIs on ExWapp's `agent/refactor-message-boundaries` branch.
+A one-page Phoenix LiveView harness for manually exercising the data,
+local-history, and structured-message APIs in
+[ExWapp 0.1.2](https://hex.pm/packages/ex_wapp/0.1.2).
 
 It connects a WhatsApp linked device with a QR code, loads contacts, sends an automatic feature suite, and marks inbound checks when you reply from WhatsApp. Received images, audio, and documents are downloaded and decrypted automatically. Image previews, an audio player, and document links remain available in memory for ten minutes.
 
 ## Setup
 
-The ExWapp repository is deliberately vendored only in your local checkout. The complete `vendor/` directory is ignored by Git and is never included in this repository.
+The project requires Elixir 1.19 or 1.20 and installs ExWapp exclusively from
+Hex. No local checkout or `vendor/` directory is required.
 
 ```bash
 git clone --branch agent/liveview-feature-harness \
   https://github.com/elchemista/demo_ex_wapp.git
 cd demo_ex_wapp
-
-mkdir -p vendor
-git clone --branch agent/refactor-message-boundaries \
-  git@github.com:elchemista/ex_wapp.git \
-  vendor/ex_wapp
 
 mix setup
 mix phx.server
@@ -24,16 +22,8 @@ mix phx.server
 
 Open [http://localhost:4000](http://localhost:4000).
 
-If you already cloned ExWapp on another branch:
-
-```bash
-git -C vendor/ex_wapp fetch origin
-git -C vendor/ex_wapp switch agent/refactor-message-boundaries
-git -C vendor/ex_wapp pull --rebase origin agent/refactor-message-boundaries
-```
-
-`vendor/ex_wapp` is the default dependency path. Set `EX_WAPP_PATH` if you keep
-ExWapp elsewhere, for example `EX_WAPP_PATH=../ex_wapp mix setup`.
+The dependency is pinned in `mix.exs` as `{:ex_wapp, "~> 0.1.2"}` and Jason is
+configured as its JSON implementation in `config/config.exs`.
 
 ## Test flow
 
@@ -98,9 +88,7 @@ Do not publish QR payloads, pairing-store files, raw media keys, or full logs co
 ## Useful commands
 
 ```bash
-mix format --check-formatted
-mix compile --warnings-as-errors
-mix test
+mix precommit
 ```
 
 This repository intentionally does not duplicate ExWapp's library test suite. Its purpose is an interactive end-to-end check against a real linked device.

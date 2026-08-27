@@ -50,7 +50,7 @@ defmodule DemoExWapp.MixProject do
       {:jason, "~> 1.4"},
       {:qr_code, "~> 3.2"},
       {:bandit, "~> 1.7"},
-      {:ex_wapp, path: "../ex_wapp", override: true}
+      {:ex_wapp, "~> 0.1.2"}
     ]
   end
 

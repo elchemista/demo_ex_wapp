@@ -69,5 +69,6 @@ config :logger, :default_formatter,
   ]
 
 config :phoenix, :json_library, Jason
+config :ex_wapp, :json_library, Jason
 
 import_config "#{config_env()}.exs"

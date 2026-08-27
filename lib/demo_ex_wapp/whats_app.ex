@@ -3,8 +3,8 @@ defmodule DemoExWapp.WhatsApp do
   Owns the single ExWapp session used by the LiveView demo.
 
   The lifecycle and QR flow follow the production wrapper used by `isma`, while
-  message-specific functions expose the structured-message and history APIs on
-  the `agent/refactor-message-boundaries` branch.
+  message-specific functions expose the structured-message and history APIs
+  provided by ExWapp 0.1.2.
   """
 
   use GenServer
