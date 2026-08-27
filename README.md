@@ -6,14 +6,17 @@ local-history, and structured-message APIs in
 
 It connects a WhatsApp linked device with a QR code, loads contacts, sends an automatic feature suite, and marks inbound checks when you reply from WhatsApp. Received images, audio, and documents are downloaded and decrypted automatically. Image previews, an audio player, and document links remain available in memory for ten minutes.
 
+## Preview
+
+![ExWapp feature harness dashboard](docs/images/ex-wapp-feature-harness.jpeg)
+
 ## Setup
 
 The project requires Elixir 1.19 or 1.20 and installs ExWapp exclusively from
 Hex. No local checkout or `vendor/` directory is required.
 
 ```bash
-git clone --branch agent/liveview-feature-harness \
-  https://github.com/elchemista/demo_ex_wapp.git
+git clone https://github.com/elchemista/demo_ex_wapp.git
 cd demo_ex_wapp
 
 mix setup
