@@ -42,6 +42,11 @@ defmodule DemoExWapp.WhatsApp do
   @spec send_text(String.t(), String.t()) :: :ok | {:ok, String.t()} | {:error, term()}
   def send_text(jid, text), do: with_session(&ExWapp.send_message(&1, jid, text))
 
+  @doc "Sends a text message that quotes an earlier message of the same chat."
+  @spec send_reply(String.t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def send_reply(jid, text, opts),
+    do: with_session(&ExWapp.Session.send_text(&1, jid, text, opts))
+
   @doc "Uploads and sends an image."
   @spec send_image(String.t(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}

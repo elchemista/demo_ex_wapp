@@ -25,6 +25,7 @@ defmodule DemoExWapp.SessionState do
 
   @send_tests [
     :send_text,
+    :send_reply,
     :send_image,
     :send_audio,
     :send_document,

@@ -21,6 +21,13 @@ defmodule DemoExWapp.SessionStateTest do
     end)
   end
 
+  test "snapshot exposes the quoted reply check alongside the other send checks" do
+    tests = SessionState.snapshot().tests
+
+    assert %{status: status} = Map.fetch!(tests, :send_reply)
+    assert status in [:pending, :running, :passed, :failed, :blocked]
+  end
+
   test "snapshot exposes the QR image source instead of inline SVG" do
     snapshot = SessionState.snapshot()
 

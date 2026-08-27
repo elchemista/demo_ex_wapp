@@ -9,7 +9,7 @@ defmodule DemoExWapp.TestSuite do
 
   require Logger
 
-  alias DemoExWapp.{SessionState, TestSuite.HistoryVerification, WhatsApp}
+  alias DemoExWapp.{SessionState, TestSuite.HistoryVerification, TestSuite.ReplyTarget, WhatsApp}
 
   @type operation :: {atom(), (-> term())}
   @type operation_result :: :passed | {:failed, term()}
@@ -68,6 +68,7 @@ defmodule DemoExWapp.TestSuite do
     [
       {:send_text,
        fn -> WhatsApp.send_text(jid, "[demo_ex_wapp] Text test. Reply to this chat.") end},
+      {:send_reply, fn -> send_quoted_reply(jid) end},
       {:send_image,
        fn ->
          WhatsApp.send_image(jid, fixture("test-image.png"),
@@ -117,6 +118,16 @@ defmodule DemoExWapp.TestSuite do
          )
        end}
     ]
+  end
+
+  @spec send_quoted_reply(String.t()) :: {:ok, String.t()} | {:error, term()}
+  defp send_quoted_reply(jid) do
+    with {:ok, target} <- jid |> WhatsApp.get_messages(limit: 20) |> ReplyTarget.pick(jid) do
+      WhatsApp.send_reply(jid, "[demo_ex_wapp] Reply test quoting the #{target.label}.",
+        quoted_id: target.id,
+        quoted_participant: target.quoted_participant
+      )
+    end
   end
 
   @spec run_operation(operation(), String.t()) :: operation_result()

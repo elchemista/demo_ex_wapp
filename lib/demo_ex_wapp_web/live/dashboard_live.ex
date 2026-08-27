@@ -18,6 +18,7 @@ defmodule DemoExWappWeb.DashboardLive do
 
   @send_tests [
     {:send_text, "Send text"},
+    {:send_reply, "Reply quoting a message"},
     {:send_image, "Send image"},
     {:send_audio, "Send audio / voice note"},
     {:send_document, "Send document"},
