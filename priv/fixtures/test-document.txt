@@ -1,0 +1,4 @@
+demo_ex_wapp document fixture
+
+If this file arrives in WhatsApp, ExWapp document upload and send succeeded.
+Reply to the same chat with any document to verify automatic download and decryption.
