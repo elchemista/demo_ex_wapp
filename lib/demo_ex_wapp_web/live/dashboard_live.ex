@@ -13,13 +13,19 @@ defmodule DemoExWappWeb.DashboardLive do
     {:list_chats, "List chat metadata"},
     {:get_messages, "Read a bounded message page"},
     {:stream_messages, "Stream chat history lazily"},
-    {:all_messages, "Stream all local messages without a limit"}
+    {:all_messages, "Stream all local messages without a limit"},
+    {:request_history, "Request older history from phone (send only)"}
   ]
 
   @send_tests [
     {:send_text, "Send text"},
     {:send_reply, "Reply quoting a message"},
     {:send_image, "Send image"},
+    {:send_video, "Send MP4 video"},
+    {:send_video_gif, "Send MP4 with GIF playback"},
+    {:send_sticker, "Send WebP sticker"},
+    {:send_animated_sticker, "Send animated WebP sticker"},
+    {:send_reaction, "Add and remove reaction (same target)"},
     {:send_audio, "Send audio / voice note"},
     {:send_document, "Send document"},
     {:send_location, "Send GPS location"},
@@ -30,6 +36,10 @@ defmodule DemoExWappWeb.DashboardLive do
   @receive_tests [
     {:receive_text, "Receive text reply"},
     {:receive_image, "Receive and download image"},
+    {:receive_video, "Receive, download and play video"},
+    {:receive_sticker, "Receive and download sticker"},
+    {:receive_reaction, "Receive reaction or removal"},
+    {:receive_history, "Import account on-demand history blob"},
     {:receive_audio, "Receive, download, and play audio"},
     {:receive_document, "Receive and download document"},
     {:receive_location, "Receive and decode GPS location"},
@@ -48,7 +58,7 @@ defmodule DemoExWappWeb.DashboardLive do
      socket
      |> assign(:page_title, "ExWapp feature test")
      |> assign(:state, state)
-     |> assign_target(first_chat_jid(state.chats))}
+     |> assign_target(state.selected_jid || "")}
   end
 
   @impl true
@@ -108,8 +118,12 @@ defmodule DemoExWappWeb.DashboardLive do
 
   @impl true
   def handle_info({SessionState, :changed, state}, socket) do
-    selected_jid = preserve_or_select(socket.assigns.selected_jid, state.chats)
-    {:noreply, socket |> assign(:state, state) |> assign_target(selected_jid)}
+    state = Map.merge(socket.assigns.state, state)
+    socket = assign(socket, :state, state)
+    selected = socket.assigns.selected_jid
+    resolved = Enum.find(state.chats, fn chat -> selected in Map.get(chat, :aliases, []) end)
+    socket = if selected != "" and resolved, do: assign_target(socket, resolved.jid), else: socket
+    {:noreply, socket}
   end
 
   def handle_info(message, socket) do
@@ -255,20 +269,20 @@ defmodule DemoExWappWeb.DashboardLive do
                 empty?(@selected_jid) or lid_jid?(@selected_jid)
             }
           >
-            Run data, history, media, GPS, contact and event suite
+            Run full messaging and history suite
           </button>
         </section>
 
         <section class="check-grid">
           <.checklist
-            title="Data and local history APIs"
-            subtitle="Contacts, chat metadata, bounded pages, and lazy streams"
+            title="Data and history APIs"
+            subtitle="Local queries and a separate older-history request to the phone"
             tests={@data_tests}
             results={@state.tests}
           />
           <.checklist
             title="Automatic sends"
-            subtitle="Marked as soon as ExWapp returns a result"
+            subtitle="Sends pass after server acknowledgement"
             tests={@send_tests}
             results={@state.tests}
           />
@@ -311,10 +325,10 @@ defmodule DemoExWappWeb.DashboardLive do
     """
   end
 
-  attr :title, :string, required: true
-  attr :subtitle, :string, required: true
-  attr :tests, :list, required: true
-  attr :results, :map, required: true
+  attr(:title, :string, required: true)
+  attr(:subtitle, :string, required: true)
+  attr(:tests, :list, required: true)
+  attr(:results, :map, required: true)
 
   @spec checklist(map()) :: Phoenix.LiveView.Rendered.t()
   defp checklist(assigns) do
@@ -323,7 +337,11 @@ defmodule DemoExWappWeb.DashboardLive do
       <h2>{@title}</h2>
       <p>{@subtitle}</p>
       <ul>
-        <li :for={{key, label} <- @tests} class={"check check-#{@results[key].status}"}>
+        <li
+          :for={{key, label} <- @tests}
+          id={"test-#{key}"}
+          class={"check check-#{@results[key].status}"}
+        >
           <span class="check-icon">{status_icon(@results[key].status)}</span>
           <span>
             <strong>{label}</strong><small :if={@results[key].detail}>{@results[key].detail}</small>
@@ -334,15 +352,16 @@ defmodule DemoExWappWeb.DashboardLive do
     """
   end
 
-  attr :type, :atom, required: true
-  attr :item, :map, required: true
+  attr(:type, :atom, required: true)
+  attr(:item, :map, required: true)
 
   @spec download(map()) :: Phoenix.LiveView.Rendered.t()
   defp download(assigns) do
     ~H"""
-    <article class="download">
+    <article class="download" id={"download-#{@type}"}>
       <strong>{String.capitalize(to_string(@type))}</strong>
-      <img :if={@type == :image} src={@item.url} alt="Downloaded WhatsApp reply" />
+      <img :if={@type in [:image, :sticker]} src={@item.url} alt="Downloaded WhatsApp reply" />
+      <video :if={@type == :video} controls preload="metadata" src={@item.url}></video>
       <audio :if={@type == :audio} controls preload="metadata" src={@item.url}></audio>
       <a href={@item.url} target="_blank" rel="noopener">
         Open {@item.filename} ({@item.byte_size} bytes)
@@ -366,27 +385,6 @@ defmodule DemoExWappWeb.DashboardLive do
       )
 
       put_flash(socket, :error, Exception.message(exception))
-  end
-
-  @spec first_chat_jid([map()]) :: String.t()
-  defp first_chat_jid(chats) when is_list(chats) do
-    case Enum.find(chats, &sendable_direct_chat?/1) do
-      nil -> ""
-      direct_chat -> direct_chat.jid
-    end
-  end
-
-  @spec sendable_direct_chat?(map()) :: boolean()
-  defp sendable_direct_chat?(chat) do
-    not Map.get(chat, :is_group?, false) and not lid_jid?(chat.jid) and
-      String.ends_with?(chat.jid, "@s.whatsapp.net") and chat.jid != "0@s.whatsapp.net"
-  end
-
-  @spec preserve_or_select(String.t(), [map()]) :: String.t()
-  defp preserve_or_select("", chats), do: first_chat_jid(chats)
-
-  defp preserve_or_select(selected, chats) do
-    if Enum.any?(chats, &(&1.jid == selected)), do: selected, else: first_chat_jid(chats)
   end
 
   @spec assign_target(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
@@ -448,6 +446,8 @@ defmodule DemoExWappWeb.DashboardLive do
   defp content_label(%{location: value}) when not is_nil(value), do: "location"
   defp content_label(%{contact: value}) when not is_nil(value), do: "contact"
   defp content_label(%{event: value}) when not is_nil(value), do: "event"
+  defp content_label(%{reaction: %{text: ""}}), do: "reaction removed"
+  defp content_label(%{reaction: value}) when is_map(value), do: "reaction"
   defp content_label(%{text: text}) when is_binary(text) and text != "", do: "text"
   defp content_label(_message), do: "message"
 end

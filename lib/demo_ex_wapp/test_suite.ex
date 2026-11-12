@@ -11,6 +11,8 @@ defmodule DemoExWapp.TestSuite do
 
   alias DemoExWapp.{SessionState, TestSuite.HistoryVerification, TestSuite.ReplyTarget, WhatsApp}
 
+  alias DemoExWapp.TestSuite.FeatureChecks
+
   @type operation :: {atom(), (-> term())}
   @type operation_result :: :passed | {:failed, term()}
   @type verification_result :: {:verified, String.t()} | {:error, term()}
@@ -57,7 +59,8 @@ defmodule DemoExWapp.TestSuite do
     [
       {:get_messages, fn -> verify_message_page(jid) end},
       {:stream_messages, fn -> verify_message_stream(jid) end},
-      {:all_messages, fn -> verify_all_messages_stream(jid) end}
+      {:all_messages, fn -> verify_all_messages_stream(jid) end},
+      {:request_history, fn -> FeatureChecks.request_history(jid) end}
     ]
   end
 
@@ -117,7 +120,9 @@ defmodule DemoExWapp.TestSuite do
            }
          )
        end}
-    ]
+    ] ++
+      FeatureChecks.media_operations(jid) ++
+      [{:send_reaction, fn -> FeatureChecks.reaction_roundtrip(jid) end}]
   end
 
   @spec send_quoted_reply(String.t()) :: {:ok, String.t()} | {:error, term()}

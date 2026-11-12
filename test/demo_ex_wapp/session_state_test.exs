@@ -9,7 +9,8 @@ defmodule DemoExWapp.SessionStateTest do
     :list_chats,
     :get_messages,
     :stream_messages,
-    :all_messages
+    :all_messages,
+    :request_history
   ]
 
   test "snapshot exposes every data and local-history check" do

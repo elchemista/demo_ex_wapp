@@ -4,7 +4,7 @@ defmodule DemoExWapp.WhatsApp do
 
   The lifecycle and QR flow follow the production wrapper used by `isma`, while
   message-specific functions expose the structured-message and history APIs
-  provided by ExWapp 0.1.2.
+  provided by ExWapp 0.1.6.
   """
 
   use GenServer
@@ -15,7 +15,6 @@ defmodule DemoExWapp.WhatsApp do
   alias ExWapp.Session.Supervisor, as: SessionSupervisor
 
   @session_id "demo"
-  @ack_poll_interval_ms 50
   @ack_timeout_ms 5_000
 
   @doc "Starts the WhatsApp wrapper."
@@ -51,6 +50,28 @@ defmodule DemoExWapp.WhatsApp do
   @spec send_image(String.t(), ExWapp.Media.source(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def send_image(jid, source, opts), do: with_session(&ExWapp.send_image(&1, jid, source, opts))
+
+  @doc "Uploads and sends an MP4 video."
+  @spec send_video(String.t(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_video(jid, source, opts), do: with_session(&ExWapp.send_video(&1, jid, source, opts))
+
+  @doc "Uploads and sends a WebP sticker."
+  @spec send_sticker(String.t(), ExWapp.Media.source(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_sticker(jid, source, opts),
+    do: with_session(&ExWapp.send_sticker(&1, jid, source, opts))
+
+  @doc "Sends or removes a reaction on the specified message."
+  @spec send_reaction(String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def send_reaction(jid, id, text, opts),
+    do: with_session(&ExWapp.send_reaction(&1, jid, id, text, opts))
+
+  @doc "Requests history preceding an anchor; completion arrives asynchronously."
+  @spec request_history(String.t(), map(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def request_history(jid, anchor, opts),
+    do: with_session(&ExWapp.request_history(&1, jid, anchor, opts))
 
   @doc "Uploads and sends audio or a push-to-talk voice note."
   @spec send_audio(String.t(), ExWapp.Media.source(), keyword()) ::
@@ -150,7 +171,21 @@ defmodule DemoExWapp.WhatsApp do
     )
 
     SessionState.update(%{connection_status: :idle})
-    {:ok, %{session: nil, qr_task: nil, subscribed?: false}}
+
+    {:ok,
+     %{
+       session: nil,
+       qr_task: nil,
+       subscribed?: false,
+       suite_task: nil,
+       refresh_timer: nil,
+       refresh_task: nil,
+       refresh_pending?: false,
+       download_tasks: %{},
+       download_queue: :queue.new(),
+       download_queue_size: 0,
+       contact_sync_after_ms: nil
+     }}
   end
 
   @impl true
@@ -181,17 +216,19 @@ defmodule DemoExWapp.WhatsApp do
 
   def handle_call(:disconnect, _from, state) do
     Logger.info("WhatsApp disconnect requested", session_id: @session_id)
+    state = state |> cancel_suite() |> cancel_background()
 
     with {:ok, session} <- session() do
       ExWapp.disconnect(session)
     end
 
     SessionState.update(%{connection_status: :disconnected, qr_image_src: nil})
-    {:reply, :ok, state |> cancel_qr_task() |> unsubscribe_session_events()}
+    {:reply, :ok, state |> cancel_suite() |> cancel_qr_task() |> unsubscribe_session_events()}
   end
 
   def handle_call(:reset_pairing, _from, state) do
     Logger.warning("WhatsApp pairing reset requested", session_id: @session_id)
+    state = state |> cancel_suite() |> cancel_background()
 
     with :ok <- stop_session(),
          :ok <- clear_store_files() do
@@ -201,46 +238,65 @@ defmodule DemoExWapp.WhatsApp do
         last_error: nil
       })
 
-      next = state |> cancel_qr_task() |> unsubscribe_session_events()
-      {:reply, :ok, %{next | session: nil}}
+      next = state |> cancel_suite() |> cancel_qr_task() |> unsubscribe_session_events()
+      {:reply, :ok, %{next | session: nil, contact_sync_after_ms: nil}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
-  def handle_call(:refresh_chats, _from, state) do
-    Logger.info("WhatsApp chat refresh requested", session_id: @session_id)
+  def handle_call(:refresh_chats, from, state),
+    do: handle_call({:refresh_chats, :manual}, from, state)
+
+  def handle_call({:refresh_chats, mode}, _from, state) do
+    now = System.monotonic_time(:millisecond)
+
+    sync_allowed? =
+      mode == :manual or is_nil(state.contact_sync_after_ms) or now >= state.contact_sync_after_ms
 
     result =
       with_session(fn session ->
         chats = ExWapp.list_chats(session)
-        contacts = maybe_sync_contacts(session, chats, ExWapp.list_contacts(session))
-        normalize_chats(chats, contacts)
+        contacts = ExWapp.list_contacts(session)
+        sync? = sync_allowed? and contact_sync_needed?(chats, contacts)
+        contacts = if sync?, do: maybe_sync_contacts(session, chats, contacts), else: contacts
+        {normalize_chats(chats, contacts), sync?}
       end)
 
     case result do
-      {:ok, chats} ->
+      {{:ok, chats}, sync?} ->
         :ok = SessionState.put_chats(chats)
-        {:reply, :ok, state}
+
+        next =
+          if sync?, do: %{state | contact_sync_after_ms: now + :timer.minutes(10)}, else: state
+
+        {:reply, :ok, next}
+
+      {{:error, reason}, sync?} ->
+        next =
+          if sync?, do: %{state | contact_sync_after_ms: now + :timer.minutes(10)}, else: state
+
+        {:reply, {:error, reason}, next}
 
       {:error, reason} ->
-        Logger.error("WhatsApp chat refresh failed", reason: inspect(reason))
         {:reply, {:error, reason}, state}
     end
   end
 
+  def handle_call({:run_suite, _jid}, _from, %{suite_task: %Task{}} = state),
+    do: {:reply, {:error, :suite_already_running}, state}
+
   def handle_call({:run_suite, jid}, _from, state) do
     case session() do
       {:ok, _session} ->
-        Logger.info("Scheduling automatic ExWapp suite", target_jid: jid)
+        :ok = SessionState.reset_tests(jid)
 
-        {:ok, _task} =
-          Task.Supervisor.start_child(DemoExWapp.TaskSupervisor, fn -> TestSuite.run(jid) end)
+        task =
+          Task.Supervisor.async_nolink(DemoExWapp.TaskSupervisor, fn -> TestSuite.run(jid) end)
 
-        {:reply, :ok, state}
+        {:reply, :ok, %{state | suite_task: task}}
 
       :error ->
-        Logger.error("Cannot schedule suite without a session", target_jid: jid)
         {:reply, {:error, :session_not_started}, state}
     end
   end
@@ -257,6 +313,32 @@ defmodule DemoExWapp.WhatsApp do
     SessionState.add_message(jid, message)
     schedule_chat_refresh()
     verify_inbound_message(jid, message)
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:ex_wapp_session, :history_sync, :completed, %{sync_type: :ON_DEMAND} = metadata},
+        state
+      ) do
+    if SessionState.snapshot().tests.request_history.status in [:running, :passed] do
+      SessionState.mark_test(
+        :receive_history,
+        :passed,
+        "Account ON_DEMAND blob imported: #{Map.get(metadata, :messages, 0)} messages (not correlated to a request ID)"
+      )
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {:ex_wapp_session, :history_sync, :failed, reason, %{sync_type: :ON_DEMAND}},
+        state
+      ) do
+    if SessionState.snapshot().tests.request_history.status in [:running, :passed] do
+      SessionState.mark_test(:receive_history, :failed, inspect(reason))
+    end
+
     {:noreply, state}
   end
 
@@ -358,7 +440,16 @@ defmodule DemoExWapp.WhatsApp do
 
     if reset_required?(reason) do
       reset_rejected_session(reason)
-      {:noreply, %{cancel_qr_task(state) | session: nil}}
+
+      {:noreply,
+       %{
+         (state
+          |> cancel_suite()
+          |> cancel_background()
+          |> cancel_qr_task())
+         | session: nil,
+           contact_sync_after_ms: nil
+       }}
     else
       SessionState.update(%{connection_status: :error, last_error: inspect(reason)})
       {:noreply, state}
@@ -368,13 +459,95 @@ defmodule DemoExWapp.WhatsApp do
   def handle_info({:ex_wapp_session, :terminated, reason}, state) do
     Logger.error("WhatsApp session terminated", reason: inspect(reason))
     SessionState.update(%{connection_status: :terminated, last_error: inspect(reason)})
-    {:noreply, %{cancel_qr_task(state) | session: nil}}
+
+    {:noreply,
+     %{
+       (state
+        |> cancel_suite()
+        |> cancel_background()
+        |> cancel_qr_task())
+       | session: nil,
+         contact_sync_after_ms: nil
+     }}
   end
 
   def handle_info({:ex_wapp_health, type, metadata}, state) do
     Logger.info("ExWapp health event", health_type: type, metadata: inspect(metadata))
     SessionState.add_health_event(type, metadata)
     {:noreply, state}
+  end
+
+  def handle_info(:schedule_chat_refresh, %{refresh_timer: nil, refresh_task: nil} = state) do
+    {:noreply, %{state | refresh_timer: Process.send_after(self(), :refresh_chats_due, 2_000)}}
+  end
+
+  def handle_info(:schedule_chat_refresh, %{refresh_task: %Task{}} = state),
+    do: {:noreply, %{state | refresh_pending?: true}}
+
+  def handle_info(:schedule_chat_refresh, state), do: {:noreply, state}
+
+  def handle_info(:refresh_chats_due, %{refresh_timer: nil} = state), do: {:noreply, state}
+
+  def handle_info(:refresh_chats_due, state) do
+    task =
+      Task.Supervisor.async_nolink(DemoExWapp.TaskSupervisor, fn ->
+        GenServer.call(__MODULE__, {:refresh_chats, :background}, 70_000)
+      end)
+
+    {:noreply, %{state | refresh_timer: nil, refresh_task: task}}
+  end
+
+  def handle_info({ref, _result}, %{suite_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    SessionState.update(%{suite_running?: false})
+    {:noreply, %{state | suite_task: nil}}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{suite_task: %Task{ref: ref}} = state) do
+    finish_interrupted_suite(reason)
+    {:noreply, %{state | suite_task: nil}}
+  end
+
+  def handle_info({ref, _result}, %{refresh_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_refresh(state)}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{refresh_task: %Task{ref: ref}} = state
+      ),
+      do: {:noreply, finish_refresh(state)}
+
+  def handle_info({:enqueue_download, ref}, state) do
+    cond do
+      map_size(state.download_tasks) < 2 ->
+        {:noreply, start_download(state, ref)}
+
+      state.download_queue_size < 16 ->
+        {:noreply,
+         %{
+           state
+           | download_queue: :queue.in(ref, state.download_queue),
+             download_queue_size: state.download_queue_size + 1
+         }}
+
+      true ->
+        fail_download(ref.type, :download_queue_full)
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({ref, _result}, %{download_tasks: tasks} = state) when is_map_key(tasks, ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_download(state, ref)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{download_tasks: tasks} = state)
+      when is_map_key(tasks, ref) do
+    {_task, type} = Map.fetch!(tasks, ref)
+    fail_download(type, {:download_worker_exited, reason})
+    {:noreply, finish_download(state, ref)}
   end
 
   def handle_info(message, state) do
@@ -393,11 +566,37 @@ defmodule DemoExWapp.WhatsApp do
         File.mkdir_p!(Path.dirname(store_path()))
 
         case SessionSupervisor.start_session(@session_id,
-               store: {ExWapp.Store.Ets, path: store_path()}
+               store:
+                 {ExWapp.Store.Ets,
+                  path: store_path(),
+                  max_messages_per_chat: message_retention(),
+                  history_storage: history_storage()}
              ) do
           {:ok, session} -> {:ok, session}
           {:error, {:already_started, session}} -> {:ok, session}
           other -> other
+        end
+    end
+  end
+
+  defp history_storage do
+    if System.get_env("EX_WAPP_INCREMENTAL_HISTORY") in ["1", "true"],
+      do: :incremental,
+      else: :snapshot
+  end
+
+  defp message_retention do
+    case System.get_env("EX_WAPP_MAX_MESSAGES_PER_CHAT") do
+      nil ->
+        :all
+
+      "all" ->
+        :all
+
+      value ->
+        case Integer.parse(value) do
+          {count, ""} when count > 0 -> count
+          _ -> :all
         end
     end
   end
@@ -425,36 +624,36 @@ defmodule DemoExWapp.WhatsApp do
   defp tag_value({:error, _reason} = error), do: error
   defp tag_value(value), do: {:ok, value}
 
-  @spec poll_message_ack(pid(), String.t(), String.t(), integer()) ::
-          {:ok, ExWapp.Chat.message_status()} | {:error, term()}
   defp poll_message_ack(session, jid, message_id, deadline_ms) do
-    status =
-      session
-      |> ExWapp.get_messages(jid, limit: 200)
-      |> Enum.find_value(fn message ->
-        if Map.get(message, :id) == message_id, do: Map.get(message, :status)
-      end)
+    topic = "ex_wapp:delivery:#{@session_id}"
+    :ok = Phoenix.PubSub.subscribe(ExWapp.PubSub, topic)
 
-    case status do
-      status when status in [:sent, :delivered, :read] ->
-        {:ok, status}
-
-      :failed ->
-        {:error, {:server_rejected, message_id}}
-
-      _pending_or_missing ->
-        continue_ack_poll(session, jid, message_id, deadline_ms)
+    try do
+      case ExWapp.Chat.find_message(session, jid, message_id) do
+        %{status: status} when status in [:sent, :delivered, :read] -> {:ok, status}
+        %{status: :failed} -> {:error, {:server_rejected, message_id}}
+        _ -> await_delivery(session, jid, message_id, deadline_ms)
+      end
+    after
+      Phoenix.PubSub.unsubscribe(ExWapp.PubSub, topic)
     end
   end
 
-  @spec continue_ack_poll(pid(), String.t(), String.t(), integer()) ::
-          {:ok, ExWapp.Chat.message_status()} | {:error, term()}
-  defp continue_ack_poll(session, jid, message_id, deadline_ms) do
-    if System.monotonic_time(:millisecond) >= deadline_ms do
-      {:error, {:server_ack_timeout, message_id}}
-    else
-      Process.sleep(@ack_poll_interval_ms)
-      poll_message_ack(session, jid, message_id, deadline_ms)
+  defp await_delivery(session, jid, message_id, deadline_ms) do
+    remaining = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:ex_wapp_delivery, ^message_id, status, _meta} when status in [:sent, :delivered, :read] ->
+        {:ok, status}
+
+      {:ex_wapp_delivery, ^message_id, :failed, meta} ->
+        # A concurrent successful receipt may overtake a recovery failure event.
+        case ExWapp.Chat.find_message(session, jid, message_id) do
+          %{status: status} when status in [:delivered, :read, :received] -> {:ok, status}
+          _ -> {:error, {:server_rejected, message_id, meta}}
+        end
+    after
+      remaining -> {:error, {:server_ack_timeout, message_id}}
     end
   end
 
@@ -623,7 +822,7 @@ defmodule DemoExWapp.WhatsApp do
 
   @spec clear_store_files() :: :ok | {:error, term()}
   defp clear_store_files do
-    paths = [store_path(), store_path() <> ".bak"]
+    paths = Enum.map(["", ".bak", ".history", ".pre-history"], &(store_path() <> &1))
 
     Enum.reduce_while(paths, :ok, fn path, :ok ->
       case File.rm(path) do
@@ -641,18 +840,72 @@ defmodule DemoExWapp.WhatsApp do
 
   @spec schedule_chat_refresh() :: :ok
   defp schedule_chat_refresh do
-    {:ok, _task} =
-      Task.Supervisor.start_child(DemoExWapp.TaskSupervisor, fn ->
-        case refresh_chats() do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("Background chat refresh failed", reason: inspect(reason))
-        end
-      end)
-
+    send(self(), :schedule_chat_refresh)
     :ok
+  end
+
+  defp finish_refresh(state) do
+    if state.refresh_pending?, do: schedule_chat_refresh()
+    %{state | refresh_task: nil, refresh_pending?: false}
+  end
+
+  defp start_download(state, ref) do
+    task =
+      Task.Supervisor.async_nolink(DemoExWapp.TaskSupervisor, fn -> download_and_publish(ref) end)
+
+    %{state | download_tasks: Map.put(state.download_tasks, task.ref, {task, ref.type})}
+  end
+
+  defp finish_download(state, ref) do
+    state = %{state | download_tasks: Map.delete(state.download_tasks, ref)}
+
+    case :queue.out(state.download_queue) do
+      {{:value, media}, queue} ->
+        start_download(
+          %{state | download_queue: queue, download_queue_size: state.download_queue_size - 1},
+          media
+        )
+
+      {:empty, _} ->
+        state
+    end
+  end
+
+  defp cancel_background(state) do
+    if state.refresh_timer, do: Process.cancel_timer(state.refresh_timer)
+    if state.refresh_task, do: Task.shutdown(state.refresh_task, :brutal_kill)
+
+    Enum.each(state.download_tasks, fn {_ref, {task, _type}} ->
+      Task.shutdown(task, :brutal_kill)
+    end)
+
+    %{
+      state
+      | refresh_timer: nil,
+        refresh_task: nil,
+        refresh_pending?: false,
+        download_tasks: %{},
+        download_queue: :queue.new(),
+        download_queue_size: 0
+    }
+  end
+
+  defp cancel_suite(%{suite_task: nil} = state), do: state
+
+  defp cancel_suite(%{suite_task: task} = state) do
+    Task.shutdown(task, :brutal_kill)
+    finish_interrupted_suite(:cancelled)
+    %{state | suite_task: nil}
+  end
+
+  defp finish_interrupted_suite(reason) do
+    for {key, result} <- SessionState.snapshot().tests,
+        result.status in [:pending, :running],
+        not String.starts_with?(Atom.to_string(key), "receive_") do
+      SessionState.mark_test(key, :blocked, "Suite stopped: #{inspect(reason)}")
+    end
+
+    SessionState.update(%{suite_running?: false})
   end
 
   @spec maybe_sync_contacts(pid(), [ExWapp.Chat.chat()], [ExWapp.Contact.t()]) ::
@@ -916,6 +1169,7 @@ defmodule DemoExWapp.WhatsApp do
     mark_received_structure(:location, :receive_location, message)
     mark_received_structure(:contact, :receive_contact, message)
     mark_received_structure(:event, :receive_event, message)
+    mark_received_structure(:reaction, :receive_reaction, message)
     maybe_download_inbound_media(Map.get(message, :media))
   end
 
@@ -938,8 +1192,7 @@ defmodule DemoExWapp.WhatsApp do
   defp maybe_download_inbound_media(%ExWapp.Media.Ref{} = ref) do
     Logger.info("Scheduling inbound media download", media_type: ref.type, mimetype: ref.mimetype)
 
-    {:ok, _task} =
-      Task.Supervisor.start_child(DemoExWapp.TaskSupervisor, fn -> download_and_publish(ref) end)
+    send(self(), {:enqueue_download, ref})
 
     :ok
   end
@@ -997,6 +1250,8 @@ defmodule DemoExWapp.WhatsApp do
 
   @spec media_receive_test(ExWapp.Media.media_type()) :: atom()
   defp media_receive_test(:image), do: :receive_image
+  defp media_receive_test(:video), do: :receive_video
+  defp media_receive_test(:sticker), do: :receive_sticker
   defp media_receive_test(:audio), do: :receive_audio
   defp media_receive_test(:document), do: :receive_document
 
@@ -1006,6 +1261,8 @@ defmodule DemoExWapp.WhatsApp do
   end
 
   defp media_filename(%{type: :image}), do: "whatsapp-image"
+  defp media_filename(%{type: :video}), do: "whatsapp-video.mp4"
+  defp media_filename(%{type: :sticker}), do: "whatsapp-sticker.webp"
   defp media_filename(%{type: :audio}), do: "whatsapp-audio"
   defp media_filename(_ref), do: "whatsapp-media.bin"
 
@@ -1014,6 +1271,7 @@ defmodule DemoExWapp.WhatsApp do
   defp inbound_content_type(%{location: value}) when not is_nil(value), do: :location
   defp inbound_content_type(%{contact: value}) when not is_nil(value), do: :contact
   defp inbound_content_type(%{event: value}) when not is_nil(value), do: :event
+  defp inbound_content_type(%{reaction: value}) when is_map(value), do: :reaction
   defp inbound_content_type(%{text: text}) when is_binary(text) and text != "", do: :text
   defp inbound_content_type(_message), do: :unknown
 

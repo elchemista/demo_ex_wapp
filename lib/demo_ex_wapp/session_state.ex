@@ -20,13 +20,19 @@ defmodule DemoExWapp.SessionState do
     :list_chats,
     :get_messages,
     :stream_messages,
-    :all_messages
+    :all_messages,
+    :request_history
   ]
 
   @send_tests [
     :send_text,
     :send_reply,
     :send_image,
+    :send_video,
+    :send_video_gif,
+    :send_sticker,
+    :send_animated_sticker,
+    :send_reaction,
     :send_audio,
     :send_document,
     :send_location,
@@ -37,6 +43,10 @@ defmodule DemoExWapp.SessionState do
   @receive_tests [
     :receive_text,
     :receive_image,
+    :receive_video,
+    :receive_sticker,
+    :receive_reaction,
+    :receive_history,
     :receive_audio,
     :receive_document,
     :receive_location,
@@ -116,12 +126,12 @@ defmodule DemoExWapp.SessionState do
   def handle_call({:update, attrs}, _from, state) do
     state
     |> Map.merge(attrs)
-    |> reply_and_broadcast()
+    |> reply_and_broadcast(state)
   end
 
   def handle_call({:put_chats, chats}, _from, state) do
     Logger.info("WhatsApp chats loaded", count: length(chats))
-    reply_and_broadcast(%{state | chats: chats})
+    reply_and_broadcast(%{state | chats: chats}, state)
   end
 
   def handle_call({:reset_tests, jid}, _from, state) do
@@ -136,7 +146,7 @@ defmodule DemoExWapp.SessionState do
       suite_started_at: DateTime.utc_now(),
       suite_finished_at: nil
     })
-    |> reply_and_broadcast()
+    |> reply_and_broadcast(state)
   end
 
   def handle_call({:mark_test, test, status, detail}, _from, state) do
@@ -152,12 +162,12 @@ defmodule DemoExWapp.SessionState do
       suite_running?: suite_running?,
       suite_finished_at: suite_finished_at(state, suite_running?)
     })
-    |> reply_and_broadcast()
+    |> reply_and_broadcast(state)
   end
 
   def handle_call({:put_download, type, download}, _from, state) do
     Logger.info("Downloaded media exposed to UI", media_type: type, url: download.url)
-    reply_and_broadcast(%{state | downloads: Map.put(state.downloads, type, download)})
+    reply_and_broadcast(%{state | downloads: Map.put(state.downloads, type, download)}, state)
   end
 
   def handle_call({:add_message, jid, message}, _from, state) do
@@ -169,17 +179,17 @@ defmodule DemoExWapp.SessionState do
     }
 
     next = %{state | messages: Enum.take([entry | state.messages], @max_messages)}
-    reply_and_broadcast(next)
+    reply_and_broadcast(next, state)
   end
 
   def handle_call({:add_health_event, type, metadata}, _from, state) do
     event = %{type: type, metadata: metadata, received_at: DateTime.utc_now()}
     next = %{state | health_events: Enum.take([event | state.health_events], @max_health_events)}
-    reply_and_broadcast(next)
+    reply_and_broadcast(next, state)
   end
 
   def handle_call(:clear_activity, _from, state) do
-    reply_and_broadcast(%{state | messages: [], health_events: [], downloads: %{}})
+    reply_and_broadcast(%{state | messages: [], health_events: [], downloads: %{}}, state)
   end
 
   @spec default_snapshot() :: snapshot()
@@ -230,10 +240,15 @@ defmodule DemoExWapp.SessionState do
   defp normalize_jid(jid) when is_binary(jid), do: jid
   defp normalize_jid(jid), do: inspect(jid)
 
-  @spec reply_and_broadcast(snapshot()) :: {:reply, :ok, snapshot()}
-  defp reply_and_broadcast(state) do
+  @spec reply_and_broadcast(snapshot(), snapshot()) :: {:reply, :ok, snapshot()}
+  defp reply_and_broadcast(state, previous) do
     state = normalize_snapshot(state)
-    :ok = Phoenix.PubSub.broadcast(DemoExWapp.PubSub, @topic, {__MODULE__, :changed, state})
+    patch = Map.reject(state, fn {key, value} -> Map.get(previous, key) == value end)
+
+    if map_size(patch) > 0 do
+      :ok = Phoenix.PubSub.broadcast(DemoExWapp.PubSub, @topic, {__MODULE__, :changed, patch})
+    end
+
     {:reply, :ok, state}
   end
 

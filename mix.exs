@@ -31,13 +31,13 @@ defmodule DemoExWapp.MixProject do
 
   defp deps do
     [
-      {:phoenix, "~> 1.8.3"},
-      {:phoenix_html, "~> 4.1"},
-      {:phoenix_live_reload, "~> 1.6", only: :dev},
-      {:phoenix_live_view, "~> 1.1"},
-      {:lazy_html, ">= 0.1.0", only: :test},
-      {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
-      {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
+      {:phoenix, "~> 1.8.16"},
+      {:phoenix_html, "~> 4.4.0"},
+      {:phoenix_live_reload, "~> 1.7.0", only: :dev},
+      {:phoenix_live_view, "~> 1.2.13"},
+      {:lazy_html, "~> 0.1.14", only: :test},
+      {:esbuild, "~> 0.10.1", runtime: Mix.env() == :dev},
+      {:tailwind, "~> 0.5.2", runtime: Mix.env() == :dev},
       {:heroicons,
        github: "tailwindlabs/heroicons",
        tag: "v2.2.0",
@@ -45,12 +45,12 @@ defmodule DemoExWapp.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:telemetry_metrics, "~> 1.0"},
-      {:telemetry_poller, "~> 1.0"},
-      {:jason, "~> 1.4"},
-      {:qr_code, "~> 3.2"},
-      {:bandit, "~> 1.7"},
-      {:ex_wapp, "~> 0.1.2"}
+      {:telemetry_metrics, "~> 1.2.0"},
+      {:telemetry_poller, "~> 1.3.0"},
+      {:jason, "~> 1.4.5"},
+      {:qr_code, "~> 3.2.0"},
+      {:bandit, "~> 1.14.1"},
+      {:ex_wapp, github: "elchemista/ex_wapp", ref: "bcb713dcdfb85516a972b179830a3b97850fdf8b"}
     ]
   end
 

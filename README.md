@@ -3,7 +3,7 @@
 ![ExWapp feature harness dashboard](docs/images/ex-wapp-feature-harness.jpeg)
 
 Phoenix LiveView demo, integration guide, and interactive feature suite for
-[ExWapp 0.1.2](https://hex.pm/packages/ex_wapp/0.1.2).
+[ExWapp](https://github.com/elchemista/ex_wapp) **0.1.6 (development branch)**.
 
 This repository shows how to create and persist an ExWapp session, pair a
 WhatsApp linked device, send and receive every supported message type, inspect
@@ -11,7 +11,7 @@ local contacts and history, and surface the results in a LiveView dashboard.
 
 > ExWapp is an unofficial WhatsApp Web client. Use a dedicated test account,
 > avoid spam, and review the risks described in the
-> [ExWapp documentation](https://hexdocs.pm/ex_wapp/0.1.2).
+> [ExWapp documentation](https://hexdocs.pm/ex_wapp).
 
 ## Run the demo
 
@@ -19,9 +19,21 @@ Requirements:
 
 - Elixir 1.19 with Erlang/OTP 28, or Elixir 1.20 with Erlang/OTP 29
 - a WhatsApp account that can link a new device
+- Git access to the ExWapp repository; Mix fetches the pinned 0.1.6 commit
+  automatically
+
+The matching branches are `codex/whatsmeow-update-0.1.6` in ExWapp and
+`codex/ex-wapp-0.1.6-suite` in this demo. The dependency is pinned to ExWapp commit
+`bcb713dcdfb85516a972b179830a3b97850fdf8b` so a separate library checkout is unnecessary.
+
+Dependencies were refreshed against the latest stable Hex releases on 2026-11-12.
+The lockfile includes Phoenix 1.8.16, LiveView 1.2.13, Bandit 1.14.1,
+Phoenix.HTML 4.4.0, Plug.Crypto 2.2.1 and lazy_html 0.1.14, including the fixes
+for the security advisories reported on the previous lockfile. Dependency
+resolution was checked; the updated application has not been compiled or tested.
 
 ```bash
-git clone https://github.com/elchemista/demo_ex_wapp.git
+git clone --branch codex/ex-wapp-0.1.6-suite https://github.com/elchemista/demo_ex_wapp.git
 cd demo_ex_wapp
 mix setup
 mix phx.server
@@ -37,21 +49,36 @@ LiveView mounted at `GET /`; downloaded test media is served temporarily from
 2. If the store is not paired, scan the QR code from WhatsApp → Linked devices.
 3. Wait for `connected`, then choose a synced chat or enter a complete JID such
    as `393331234567@s.whatsapp.net`.
-4. Click **Run data, history, media, GPS, contact and event suite**.
-5. Reply from WhatsApp with text, image, audio, document, location, contact,
-   and optionally a calendar event to complete the inbound checks.
+4. Click **Run full messaging and history suite**. This sends real test messages
+   to the selected chat, adds/removes one reaction, and requests older history.
+5. Reply from WhatsApp with text, image, video, sticker, audio, document, location,
+   contact, and optionally a calendar event. Add or remove a reaction on a demo
+   message to exercise the inbound reaction check.
+6. Keep the primary phone online for the history request. The separate import
+   check updates only after an on-demand history blob has been persisted.
 
 The dashboard covers:
 
 | Area | Checks |
 | --- | --- |
-| Data and history | contact sync, contacts, chat metadata, bounded history, lazy history stream, complete local stream |
-| Outbound | text, quoted reply, image, voice note, document, GPS, vCard contact, optional calendar event |
-| Inbound | text, image download, audio download/playback, document download, GPS, contact, optional event |
+| Data and history | contact sync, contacts, chat metadata, bounded history, lazy history stream, complete local stream, request 50 older messages |
+| Outbound | text, quoted reply, image, MP4 video, MP4 with GIF playback, static/animated WebP stickers, reaction add/remove, voice note, document, GPS, vCard contact, optional calendar event |
+| Inbound | text, image/sticker previews, video/audio download and playback, document download, reactions/removals, GPS, contact, optional event, account on-demand history import |
 
 The event test is optional because that WhatsApp Web message type is less
-stable than text, media, location, and contacts. History functions inspect the
-local ExWapp store; they do not request a complete remote account export.
+stable than text, media, location, and contacts. Outbound checks wait for a server
+acknowledgement; this does not prove recipient delivery or visual rendering.
+The reaction check prefers a recent outgoing message and waits for both the
+addition and removal acknowledgements on that same target.
+
+Local history checks inspect the store. `request_history` separately sends an
+encrypted request to the phone using an existing message as an anchor. A green
+request check means it was sent, not that history arrived. The import check
+observes account-level `ON_DEMAND` blob completion/failure after a request;
+ExWapp does not expose a request ID in that event, so it cannot prove that the
+blob belongs to this chat or this request. Inline history imports do not emit
+this blob-completion event. The phone may return no records, and the import
+check can remain pending. Neither API guarantees a complete account export.
 
 ## Add ExWapp to another application
 
@@ -59,11 +86,17 @@ local ExWapp store; they do not request a complete remote account export.
 # mix.exs
 defp deps do
   [
-    {:ex_wapp, "~> 0.1.2"},
+    {:ex_wapp,
+     github: "elchemista/ex_wapp", ref: "bcb713dcdfb85516a972b179830a3b97850fdf8b"},
     {:jason, "~> 1.4"}
   ]
 end
 ```
+
+The new APIs below require the pinned 0.1.6 commit. This guide does not assume
+that version has been published on Hex. For local library development, replace
+the Git dependency with `{:ex_wapp, path: "../ex_wapp"}` and check out the matching
+library branch.
 
 ExWapp requires the host application to select a JSON implementation:
 
@@ -340,6 +373,23 @@ jid = "393XXXXXXXXX@s.whatsapp.net"
     view_once: false
   )
 
+{:ok, client, video_id} =
+  ExWapp.send_video(client, jid, {:path, "clip.mp4"},
+    caption: "A short clip", seconds: 1, width: 128, height: 128)
+
+# GIF-style playback uses MP4 bytes, not a .gif source file.
+{:ok, client, gif_id} =
+  ExWapp.send_video(client, jid, {:path, "clip.mp4"}, gif_playback: true)
+
+{:ok, client, sticker_id} =
+  ExWapp.send_sticker(client, jid, {:path, "sticker.webp"}, animated: false)
+
+# Target an outgoing message; use from_me: false for a received message.
+{:ok, client, reaction_id} =
+  ExWapp.send_reaction(client, jid, text_id, "👍", from_me: true)
+{:ok, client, removal_id} =
+  ExWapp.send_reaction(client, jid, text_id, "", from_me: true)
+
 {:ok, client, audio_id} =
   ExWapp.send_audio(client, jid, {:path, "voice.ogg"},
     mimetype: "audio/ogg; codecs=opus",
@@ -385,11 +435,21 @@ Media sources may be `{:path, path}`, `{:bytes, binary}`, or an existing
 | --- | --- |
 | All/context | `:id`, `:metadata`, `:mentions`, `:quoted_id`, `:quoted_participant` |
 | Image | `:mimetype`, `:caption`, `:height`, `:width`, `:jpeg_thumbnail`, `:view_once` |
+| Video | `:mimetype`, `:caption`, `:seconds`, `:width`, `:height`, `:jpeg_thumbnail`, `:gif_playback`, `:view_once` |
+| Sticker | `:mimetype`, `:width`, `:height`, `:animated` |
+| Reaction | `:from_me` (direction of the target), `:participant` (required for another sender in a group); empty text removes |
 | Audio | `:mimetype`, `:seconds`/`:duration`, `:ptt`, `:waveform`, `:view_once` |
 | Document | `:mimetype`, `:title`, `:page_count`, `:file_name`, `:caption`, `:jpeg_thumbnail`, `:contact_vcard` |
 | Location | `:name`, `:address`, `:url`, `:is_live`, `:accuracy`, `:speed`, `:bearing`, `:comment`, `:jpeg_thumbnail` |
 | Contact | `:is_self_contact` |
 | Event | `:description`, `:location`, `:join_link`, `:end_time`, `:extra_guests_allowed`, `:scheduled_call`, `:has_reminder`, `:reminder_offset_seconds`, `:canceled` |
+
+Supply encoded MP4/WebP files and their metadata; ExWapp does not transcode or
+generate thumbnails. For animated stickers, supply animated WebP bytes and set
+`animated: true`. Reaction events contain a `reaction` map with target
+`message_id`, `chat_jid`, `from_me`, `participant`, `text`, and
+`sender_timestamp_ms`; empty `text` means removal. Events are stored separately,
+without aggregating the current reactions on the target message.
 
 A successful send means the encrypted stanza reached the socket. Delivery and
 read confirmation arrive asynchronously.
@@ -418,6 +478,24 @@ status = ExWapp.status(client)
 last_error = ExWapp.last_error(client)
 diagnostics = ExWapp.diagnostics(client)
 ```
+
+To ask the phone for earlier messages, choose a stored, non-reaction message:
+
+```elixir
+{:ok, history} = ExWapp.stream_messages(client, jid, order: :oldest_first)
+anchor = Enum.find(history, &is_nil(Map.get(&1, :reaction)))
+
+case anchor do
+  nil -> {:error, :no_history_anchor}
+  message -> ExWapp.request_history(client, jid, message, count: 50)
+end
+```
+
+The anchor needs `id`, `from_me`, and a Unix timestamp in **seconds**. The local
+count bound is 1–1000. The facade returns `{:ok, updated_client, request_id}`;
+the session API returns `{:ok, request_id}`. Read the local store again after
+history import. Peer history requests are not normal outgoing chat messages and
+must not be checked using the demo's ordinary `await_message_ack/2` helper.
 
 Chat values hold metadata; messages are stored and queried separately. Call
 records contain signaling metadata only—ExWapp does not implement VoIP audio,
@@ -450,6 +528,8 @@ temporary previews available for ten minutes.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `EX_WAPP_STORE_PATH` | `var/ex_wapp/default.etf` | Pairing and session store path |
+| `EX_WAPP_MAX_MESSAGES_PER_CHAT` | `all` | Optional oldest-first retention; archive before enabling |
+| `EX_WAPP_INCREMENTAL_HISTORY` | unset | `1` enables the library’s incremental history mode |
 | `EX_WAPP_DEBUG` | `true` in development | Enable ExWapp debug logging |
 | `DEMO_LOG_LEVEL` | `info` | `debug`, `info`, `warning`, or `error` |
 | `PORT` | `4000` | Phoenix HTTP port |
@@ -469,10 +549,55 @@ mix phx.server
 Do not publish QR payloads, store files, media keys, or logs containing private
 JIDs and message content.
 
+## Traffic and download limits
+
+The target is chosen explicitly and stays unchanged during background updates.
+Only one interactive suite can run at a time; disconnect/reset cancels its task
+and pending background downloads. A refresh burst is coalesced into one task.
+Background contact synchronization has a ten-minute cooldown; the manual refresh
+button can explicitly retry it. Delivery checks use acknowledgement events and
+an indexed lookup.
+
+Automatic downloads use two workers and a queue of at most 16 items. Decrypted
+previews are stored in private temporary files, with default limits of 256 MiB,
+64 items and ten minutes. Configure these through:
+
+```elixir
+config :demo_ex_wapp, DemoExWapp.DownloadStore,
+  dir: "var/downloads",
+  ttl_ms: :timer.minutes(10),
+  max_bytes: 256 * 1024 * 1024,
+  max_items: 64
+```
+
+Idle files are evicted when necessary; active responses hold a lease. Video
+supports byte ranges. Only passive image/audio/video MIME types are served inline;
+SVG, HTML and unknown types are attachments, with `nosniff` and a sandbox CSP.
+The library still holds one bounded media binary while decrypting it.
+
+`EX_WAPP_INCREMENTAL_HISTORY=1` is optional. It creates a `.history` sidecar and
+retains the pre-migration snapshot as `.pre-history`. Back up the main store and
+its history sidecar together with the session stopped. Once migrated, the
+library recognizes the format even if the environment variable is removed.
+Pairing reset removes those account files as well. The underlying format and
+cross-process deployment limits are documented in the ExWapp README.
+
 ## Automated tests
 
-The repository contains 20 ExUnit tests for the dashboard route, QR rendering,
-session state, lazy-history verification, and quoted-reply target selection:
+The ExUnit suite covers the dashboard route, QR rendering, session state,
+lazy-history verification, quoted-reply selection, and the 0.1.6 feature checks:
+
+- MP4/WebP fixtures and normal/GIF/animated send options;
+- reaction target direction and group participants, add/remove acknowledgements,
+  missing targets, and acknowledgement failures;
+- bounded history-anchor selection, request failures, and separate import events;
+- incoming reactions filtered by chat/direction and LiveView checklist updates;
+- video controls and sticker previews;
+- preserving a manual target during broadcasts and rejecting synthetic anchors;
+- attachment headers for SVG, video range requests and file leases during expiry.
+
+The latest hardening tests were added but **not executed**, as requested.
+Static review and syntax parsing do not replace an ExUnit/build run.
 
 ```bash
 mix precommit
@@ -489,8 +614,10 @@ at `/` is the end-to-end protocol and media test against a real linked device.
 - `lib/demo_ex_wapp/test_suite.ex` — interactive outbound/data/history suite
 - `lib/demo_ex_wapp/session_state.ex` — shared dashboard state
 - `lib/demo_ex_wapp/download_store.ex` — temporary inbound-media downloads
-- `priv/fixtures/` — image, audio, and document send fixtures
+- `lib/demo_ex_wapp/test_suite/feature_checks.ex` — video, sticker, reaction, and phone-history checks
+- `priv/fixtures/` — image, video, sticker, audio, and document send fixtures
 - `test/` — automated ExUnit suite
 
-See the complete [ExWapp 0.1.2 HexDocs](https://hexdocs.pm/ex_wapp/0.1.2)
-for module-level API details.
+For the new APIs, consult `README.md` and the module docs in the pinned ExWapp
+0.1.6 source (`deps/ex_wapp`). [Published HexDocs](https://hexdocs.pm/ex_wapp) may describe an
+earlier release until 0.1.6 is published.
