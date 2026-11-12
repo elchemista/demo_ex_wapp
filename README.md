@@ -22,8 +22,8 @@ Requirements:
 - Git access to the ExWapp repository; Mix fetches the pinned 0.1.6 commit
   automatically
 
-The matching branches are `codex/whatsmeow-update-0.1.6` in ExWapp and
-`codex/ex-wapp-0.1.6-suite` in this demo. The dependency is pinned to ExWapp commit
+The matching branches are `whatsmeow-update-0.1.6` in ExWapp and
+`ex-wapp-0.1.6-suite` in this demo. The dependency is pinned to ExWapp commit
 `bcb713dcdfb85516a972b179830a3b97850fdf8b` so a separate library checkout is unnecessary.
 
 Dependencies were refreshed against the latest stable Hex releases on 2026-11-12.
@@ -33,7 +33,7 @@ for the security advisories reported on the previous lockfile. Dependency
 resolution was checked; the updated application has not been compiled or tested.
 
 ```bash
-git clone --branch codex/ex-wapp-0.1.6-suite https://github.com/elchemista/demo_ex_wapp.git
+git clone --branch ex-wapp-0.1.6-suite https://github.com/elchemista/demo_ex_wapp.git
 cd demo_ex_wapp
 mix setup
 mix phx.server
